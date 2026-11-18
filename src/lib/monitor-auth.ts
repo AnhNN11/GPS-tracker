@@ -7,15 +7,29 @@ export function trustedWorkflow(
   payload: JWTPayload,
   repository = process.env.MONITOR_GITHUB_REPOSITORY || "AnhNN11/GPS-tracker",
 ) {
+  const defaultRepo = repository === "AnhNN11/GPS-tracker";
+  const repositoryId =
+    process.env.MONITOR_GITHUB_REPOSITORY_ID ||
+    (defaultRepo ? "1462212250" : "");
+  const ownerId =
+    process.env.MONITOR_GITHUB_OWNER_ID || (defaultRepo ? "110618502" : "");
+  if (!repositoryId || !ownerId) return false;
+  const [owner, name] = repository.split("/");
+  const subjects = [
+    `repo:${repository}:ref:refs/heads/main`,
+    `repo:${owner}@${ownerId}/${name}@${repositoryId}:ref:refs/heads/main`,
+  ];
   return (
     payload.repository === repository &&
+    payload.repository_id === repositoryId &&
+    payload.repository_owner_id === ownerId &&
     payload.ref === "refs/heads/main" &&
     payload.workflow_ref ===
       repository + "/.github/workflows/gps-monitor.yml@refs/heads/main" &&
     ["schedule", "workflow_dispatch", "push"].includes(
       String(payload.event_name),
     ) &&
-    payload.sub === "repo:" + repository + ":ref:refs/heads/main"
+    subjects.includes(String(payload.sub))
   );
 }
 export async function authorizeMonitor(header: string | null) {

@@ -17,7 +17,7 @@ File `.env.local` được Git bỏ qua. Không đưa URI, mã thiết lập, co
 
 Workflow **.github/workflows/gps-monitor.yml** gọi **GET /api/cron** theo lịch mục tiêu 5 phút/lần, khi push lên main hoặc chạy thủ công từ GitHub Actions. Không cần Vercel Pro, không có tiến trình `setInterval` phải chạy trong Vercel, không phải lưu khóa giám sát trong repo.
 
-Mỗi lần chạy workflow yêu cầu một GitHub OIDC token ngắn hạn. API xác minh chữ ký bằng JWKS chính thức, issuer, audience, repository, nhánh main, tên workflow và loại sự kiện. Token từ fork, pull request hoặc workflow khác bị từ chối. Mặc định chỉ tin repo `AnhNN11/GPS-tracker`; nếu fork, chủ sở hữu phải cập nhật workflow và biến `MONITOR_GITHUB_REPOSITORY`.
+Mỗi lần chạy workflow yêu cầu một GitHub OIDC token ngắn hạn. API xác minh chữ ký bằng JWKS chính thức, issuer, audience, repository, nhánh main, tên workflow, ID bất biến của repository/owner và loại sự kiện. Token từ fork, pull request hoặc workflow khác bị từ chối. Mặc định chỉ tin repo `AnhNN11/GPS-tracker`; nếu fork, chủ sở hữu phải cập nhật workflow và các biến `MONITOR_GITHUB_REPOSITORY`, `MONITOR_GITHUB_REPOSITORY_ID`, `MONITOR_GITHUB_OWNER_ID`.
 
 GitHub Actions có thể chạy trễ, bỏ lượt và tắt lịch sau thời gian dài repo không có hoạt động. Vì vậy ngưỡng mất cập nhật 5 phút **không đồng nghĩa** cảnh báo chắc chắn xuất hiện trong đúng 5 phút; thường phải cộng thời gian chờ lượt kiểm tra. Trang Cảnh báo hiển thị nhịp kiểm tra gần nhất và cảnh báo khi lâu không có nhịp.
 
