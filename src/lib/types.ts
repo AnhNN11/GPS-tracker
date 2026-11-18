@@ -27,5 +27,6 @@ export type State = {
   users: Person[];
   me: Person;
   alerts: CampusAlert[];
+  monitor?: { lastRunAt: number | null };
   serverTime: number;
 };

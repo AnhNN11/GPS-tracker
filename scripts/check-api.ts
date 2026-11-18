@@ -4,11 +4,13 @@ import { spawn } from "node:child_process";
 import { startTestDatabase } from "./test-database";
 const fixture = await startTestDatabase();
 process.env.APP_ORIGIN = "http://localhost:3107";
-const { createUser } = await import("../src/lib/auth");
+const { issueSetupToken } = await import("../src/lib/setup");
 const { collections, closeDatabase } = await import("../src/lib/db");
 const c = await collections();
 const password = randomBytes(24).toString("hex");
-await createUser("QA Admin", "admin@example.invalid", password, "admin");
+const setupCode = await issueSetupToken();
+const monitorSecret = randomBytes(32).toString("hex");
+process.env.CRON_SECRET = monitorSecret;
 const origin = "http://localhost:3107";
 const child = spawn(
   process.execPath,
@@ -55,6 +57,43 @@ try {
     await new Promise((r) => setTimeout(r, 300));
   }
   assert.ok(ready, logs);
+  assert.equal((await (await request("setup/status")).json()).required, true);
+  assert.equal(
+    (
+      await request("setup", "POST", {
+        name: "QA Admin",
+        email: "admin@example.invalid",
+        password,
+        code: "wrong".repeat(10),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request("setup", "POST", {
+        name: "QA Admin",
+        email: "admin@example.invalid",
+        password,
+        code: setupCode,
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await (await request("setup/status")).json()).required, false);
+  assert.equal(
+    (
+      await request("setup", "POST", {
+        name: "Intruder",
+        email: "intruder@example.invalid",
+        password,
+        code: setupCode,
+      })
+    ).status,
+    400,
+  );
+  assert.equal((await fetch(origin + "/api/cron")).status, 401);
+
   assert.equal((await request("state")).status, 401);
   assert.equal(
     (
@@ -75,6 +114,25 @@ try {
   assert.equal(login.status, 200);
   const adminCookie = login.headers.get("set-cookie")!.split(";")[0];
   assert.ok(login.headers.get("set-cookie")?.includes("HttpOnly"));
+  const pushConfig = await (
+    await request("push/config", "GET", undefined, adminCookie)
+  ).json();
+  assert.ok(pushConfig.publicKey);
+  assert.equal(pushConfig.privateKey, undefined);
+  assert.equal(
+    (
+      await request(
+        "push/subscribe",
+        "POST",
+        {
+          endpoint: "https://127.0.0.1/private",
+          keys: { p256dh: "a".repeat(87), auth: "b".repeat(22) },
+        },
+        adminCookie,
+      )
+    ).status,
+    400,
+  );
   const boundary = {
     name: "Test campus",
     address: "Test address",
@@ -200,8 +258,23 @@ try {
       },
     },
   );
-  const { sweep } = await import("../src/lib/store");
-  await sweep();
+  const cron = await fetch(origin + "/api/cron", {
+    headers: { Authorization: "Bearer " + monitorSecret },
+  });
+  assert.equal(cron.status, 200);
+  assert.ok((await c.runtime.findOne({ key: "monitor" }))?.lastRunAt);
+  assert.equal(
+    await c.alerts.countDocuments({
+      user_id: memberId,
+      type: "stale",
+      active: true,
+    }),
+    1,
+  );
+  assert.equal(
+    (await request("push/config", "GET", undefined, memberCookie)).status,
+    403,
+  );
   const alertState = await (
     await request("state", "GET", undefined, memberCookie)
   ).json();

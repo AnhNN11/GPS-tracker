@@ -1,6 +1,12 @@
 import nextEnv from "@next/env";
 import { MongoClient, type ClientSession } from "mongodb";
-import type { UserRow, AlertRow, Campus } from "./models";
+import type {
+  UserRow,
+  AlertRow,
+  Campus,
+  RuntimeRow,
+  PushDevice,
+} from "./models";
 nextEnv.loadEnvConfig(process.cwd());
 type SessionRow = {
   token: string;
@@ -29,6 +35,16 @@ async function connect() {
     await Promise.all([
       db.collection("users").createIndex({ id: 1 }, { unique: true }),
       db.collection("users").createIndex({ email: 1 }, { unique: true }),
+      db
+        .collection("users")
+        .createIndex({ enabled: 1, tracking: 1, "reading.capturedAt": 1 }),
+      db.collection("runtime").createIndex({ key: 1 }, { unique: true }),
+      db
+        .collection("push_devices")
+        .createIndex({ endpoint: 1 }, { unique: true }),
+      db
+        .collection("alerts")
+        .createIndex({ active: 1, pushSentAt: 1, pushClaimUntil: 1 }),
       db.collection("sessions").createIndex({ token: 1 }, { unique: true }),
       db
         .collection("sessions")
@@ -68,6 +84,8 @@ export async function collections() {
     settings: db.collection<{ key: string; value: Campus }>("settings"),
     alerts: db.collection<AlertRow>("alerts"),
     limits: db.collection<LimitRow>("login_limits"),
+    runtime: db.collection<RuntimeRow>("runtime"),
+    pushDevices: db.collection<PushDevice>("push_devices"),
   };
 }
 export async function transaction<T>(

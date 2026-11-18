@@ -29,4 +29,27 @@ export type AlertRow = {
   acknowledged_at: number | null;
   report: string | null;
   reported_at: number | null;
+  pushSentAt?: number;
+  pushDeliveredTo?: string[];
+  pushClaimUntil?: number;
+  pushClaim?: string;
+};
+export type RuntimeRow = {
+  key: string;
+  tokenHash?: string;
+  expiresAt?: number;
+  consumedAt?: number;
+  completed?: boolean;
+  touchedAt?: number;
+  lastRunAt?: number;
+  lastResult?: { checked: number; flagged: number; remaining: boolean };
+  publicKey?: string;
+  privateKey?: string;
+};
+export type PushDevice = {
+  id: string;
+  user_id: string;
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+  createdAt: number;
 };

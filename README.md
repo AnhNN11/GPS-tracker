@@ -1,64 +1,61 @@
 # Campus Guard
 
-Next.js App Router + Ant Design + Leaflet + MongoDB Atlas. Tên trường mặc định: **Phân hiệu 1 Trường Thiếu sinh quân miền Trung, phường Thống Nhất, Pleiku, Gia Lai**. Không gán tọa độ hay ranh giới trường chưa được xác minh. Bản đồ khởi tạo ở khu vực Pleiku; admin tìm khuôn viên và vẽ theo hàng rào thực tế.
+Next.js + Ant Design + MongoDB Atlas, deploy trên **Vercel Hobby**. Trường mặc định: Phân hiệu 1 Trường Thiếu sinh quân miền Trung, phường Thống Nhất, Pleiku, Gia Lai. Admin xác nhận ranh giới thực tế bằng cách vẽ đa giác trên bản đồ.
 
-## Chạy trên máy chủ
+## Production trên Vercel — không cần chạy CLI trên máy cá nhân
 
-Yêu cầu Node.js >=22.13 (khuyến nghị Node 24 LTS), MongoDB replica set/Atlas và quyền truy cập mạng tới database. Sao chép `.env.example` thành `.env.local`, điền `MONGODB_URI`, `MONGODB_DB` và `APP_ORIGIN`. Không đưa chuỗi kết nối vào mã client, biến `NEXT_PUBLIC_*`, Git hoặc log. File `.env.local` đã được Git bỏ qua. Từ thư mục này:
+1. Cấu hình Environment Variables: `MONGODB_URI`, `MONGODB_DB=campus_guard`, `APP_ORIGIN=https://gpstracker-one.vercel.app`. URI và Origin là biến của môi trường Production; redeploy sau khi thay đổi.
+2. Mở **/setup**, nhập mã thiết lập riêng và tự chọn tên, email, mật khẩu quản trị. Có thể dùng liên kết cấp riêng dạng `/setup#setup=...`; phần fragment không gửi lên server trong URL. Sau khi nhập mã, trang xóa fragment khỏi thanh địa chỉ.
+3. Mã thiết lập được lưu dưới dạng hash, hết hạn sau 24 giờ và chỉ dùng được một lần. Chủ sở hữu cũng có thể dùng biến bí mật `ADMIN_SETUP_TOKEN` (tối thiểu 32 ký tự ngẫu nhiên) trên Vercel. Không có đăng ký admin công khai, tài khoản hay mật khẩu mặc định. Sau khi khởi tạo thành công, việc khởi tạo bị khóa bằng transaction, kể cả khi có hai yêu cầu đồng thời.
+4. Admin đăng nhập, vẽ và lưu ranh giới khuôn viên rồi cấp tài khoản người dùng.
+5. Admin mở Cảnh báo → **Nhận thông báo trên thiết bị**. Trên iPhone, thêm website vào Màn hình chính và mở từ biểu tượng trước khi bật thông báo.
+6. Người dùng mở Vị trí của tôi, đồng ý chia sẻ và cấp quyền vị trí.
+
+File `.env.local` được Git bỏ qua. Không đưa URI, mã thiết lập, cookie, khóa VAPID riêng hoặc mật khẩu vào mã client hay biến `NEXT_PUBLIC_*`. Các khóa Web Push được tạo và lưu riêng ở MongoDB phía server; API chỉ trả public key cho admin đã xác thực.
+
+## Giám sát tự động trên gói miễn phí
+
+Workflow **.github/workflows/gps-monitor.yml** gọi **GET /api/cron** theo lịch mục tiêu 5 phút/lần, khi push lên main hoặc chạy thủ công từ GitHub Actions. Không cần Vercel Pro, không có tiến trình `setInterval` phải chạy trong Vercel, không phải lưu khóa giám sát trong repo.
+
+Mỗi lần chạy workflow yêu cầu một GitHub OIDC token ngắn hạn. API xác minh chữ ký bằng JWKS chính thức, issuer, audience, repository, nhánh main, tên workflow và loại sự kiện. Token từ fork, pull request hoặc workflow khác bị từ chối. Mặc định chỉ tin repo `AnhNN11/GPS-tracker`; nếu fork, chủ sở hữu phải cập nhật workflow và biến `MONITOR_GITHUB_REPOSITORY`.
+
+GitHub Actions có thể chạy trễ, bỏ lượt và tắt lịch sau thời gian dài repo không có hoạt động. Vì vậy ngưỡng mất cập nhật 5 phút **không đồng nghĩa** cảnh báo chắc chắn xuất hiện trong đúng 5 phút; thường phải cộng thời gian chờ lượt kiểm tra. Trang Cảnh báo hiển thị nhịp kiểm tra gần nhất và cảnh báo khi lâu không có nhịp.
+
+API cũng hỗ trợ `Authorization: Bearer <CRON_SECRET>` nếu chủ sở hữu cấu hình một secret ngẫu nhiên dài ít nhất 32 ký tự cho scheduler khác. Secret không nằm trong URL và không được đưa vào source. Mỗi lượt kiểm tra có giới hạn batch/thời gian để phù hợp Vercel Function; các lượt sau xử lý tiếp phần còn lại. Đọc dashboard vẫn có bước kiểm tra bù ngắn.
+
+## Thông báo trên điện thoại
+
+Dùng Web Push chuẩn qua Service Worker, không gọi `new Notification()` trên trang. Push được mã hóa, chỉ gửi tới thiết bị của admin hiện còn quyền truy cập và đã bật thông báo. Khi admin đăng xuất, thiết bị đó được hủy đăng ký nhận push. Service Worker không cache dữ liệu riêng và không lấy GPS nền.
+
+Cảnh báo mới được thử gửi ngay sau khi server nhận mẫu vị trí, và các thông báo đang chờ được xử lý lại qua lịch monitor. Mỗi thiết bị có trạng thái gửi riêng để lần thử lại không gửi trùng cho thiết bị đã thành công; endpoint hết hạn được xóa. Việc gửi thành công tới dịch vụ push không bảo đảm thiết bị sẽ hiển thị ngay vì còn phụ thuộc mạng, hệ điều hành và quyền người dùng.
+
+FCM/Firebase có thể bổ sung sau khi kết nối project. Bản này dùng Web Push trực tiếp, không yêu cầu Firebase project hoặc service-account key để chạy. Chưa chuyển tài khoản và dữ liệu từ MongoDB sang Firebase.
+
+## Ranh giới và sai số
+
+- Vẽ đa giác theo hàng rào; hỗ trợ đa giác lõm, từ 3–100 đỉnh, không tự cắt, diện tích tối thiểu 100 m² và kích thước trong 10 km.
+- Sai số GPS tối đa mặc định 50 m, vùng đệm 10 m. Chỉ tính ngoài nếu điểm ở ngoài và khoảng cách đến ranh giới lớn hơn sai số + vùng đệm.
+- Cần ít nhất 2 mẫu ngoài liên tiếp kéo dài tối thiểu 30 giây, hai mẫu cách nhau không quá 90 giây. Mẫu trong/không rõ ngắt chuỗi xác nhận.
+- Quá 5 phút không có mẫu mới trong phiên chia sẻ tạo cảnh báo mất cập nhật. Từ chối mẫu trùng, cũ quá 90 giây hoặc xa tương lai quá 10 giây.
+- Ghi nhận của admin và báo cáo người dùng không xóa cảnh báo. Người dùng có thể dừng chia sẻ; trạng thái dừng không chứng minh đã ra ngoài. Chưa có lịch ca bắt buộc theo dõi.
+- GPS chỉ là ước lượng và có thể bị giả mạo. Không dùng để bảo đảm chính xác từng mét ở hàng rào.
+- Web có thể dừng lấy GPS khi khóa màn hình hoặc chuyển ứng dụng. Firebase/PWA cũng không thay thế module định vị nền native.
+
+## Phát triển và kiểm thử
+
+Yêu cầu Node >=22.13 và MongoDB replica set/Atlas. App, script và monitor cùng đọc `.env.local`. Không cần ổ đĩa database cục bộ trên Vercel. Các file SQLite cũ không còn được sử dụng và không bị xóa.
 
 ```powershell
 npm install
 npm run db:check
-npm run admin
 npm run dev
-```
-
-Lệnh `admin` hỏi email, tên và mật khẩu (ít nhất 12 ký tự, không hiển thị). Không có tài khoản hay mật khẩu mặc định. Mở http://localhost:3000, đăng nhập bằng tài khoản vừa tạo. Trong cửa sổ terminal thứ hai chạy:
-
-```powershell
-npm run monitor
-```
-
-**Monitor phải chạy liên tục**, kể cả khi không ai mở trình duyệt. Nó kiểm tra quá hạn mỗi 30 giây và ghi cảnh báo vào MongoDB. API dashboard cũng kiểm tra bù khi được đọc. Cảnh báo hiện trên trang admin; nút Bật thông báo sử dụng Notification API khi trang vẫn mở. **Chưa triển khai Web Push / SMS / email khi admin đóng trang.**
-
-## Luồng sử dụng
-
-1. Admin vào Khuôn viên trường → Thiết lập → di chuyển/phóng to bản đồ → nhấp các góc theo hàng rào → Lưu. Hình vẽ phải đơn, không tự cắt, ít nhất 3 đỉnh và diện tích 100 m². Không sử dụng ranh giới minh họa để kết luận vi phạm.
-2. Admin tạo tài khoản người dùng tại Tài khoản. Chỉ admin được tạo tài khoản, xem người khác, sửa ranh giới, khóa/mở tài khoản, ghi nhận cảnh báo.
-3. Người dùng đăng nhập → Vị trí của tôi → đồng ý chia sẻ → cấp quyền vị trí. Mục tiêu lấy mẫu mỗi 20 giây khi trang hoạt động. Vị trí được tính và lưu trên máy chủ. Người dùng chỉ xem vị trí/cảnh báo của mình và gửi báo cáo cho admin.
-4. Người dùng có thể dừng chia sẻ. Phiên này kết thúc giám sát, các cảnh báo đang hoạt động kết thúc; lịch sử vẫn còn. Không coi việc dừng chia sẻ là chứng cứ đã ra khỏi trường. Admin thấy trạng thái Chưa chia sẻ.
-
-## Cách đo
-
-- Dùng phép kiểm tra điểm trong đa giác (hỗ trợ khuôn viên lõm) và khoảng cách ngắn nhất tới các cạnh. Phép chiếu cục bộ theo mét, dành cho khuôn viên nhỏ (giới hạn 10 km từ đỉnh đầu).
-- Chỉ xác nhận ngoài khi điểm nằm ngoài, sai số <=50 m, khoảng cách tới ranh giới > sai số GPS + vùng đệm 10 m. Điểm gần hàng rào và điểm GPS kém được ghi Chưa rõ.
-- Ít nhất 2 mẫu ngoài liên tiếp, kéo dài tối thiểu 30 giây; khoảng cách giữa hai mẫu không quá 90 giây. Mẫu trong/không rõ hoặc khoảng nghỉ quá lâu ngắt chuỗi xác nhận. Cảnh báo ngoài vùng kết thúc khi có mẫu xác nhận trong vùng hoặc admin thay đổi ranh giới.
-- Không có vị trí mới quá 5 phút trong phiên chia sẻ → cảnh báo Mất cập nhật. Dùng thời điểm thu GPS, từ chối mẫu trùng, quá cũ (>90 giây) hoặc quá xa tương lai (>10 giây). Ngưỡng có thể chỉnh trong giao diện.
-- Mỗi người chỉ có một cảnh báo đang hoạt động cho mỗi loại. Ghi nhận của admin và báo cáo của người dùng không xóa cảnh báo.
-- `accuracy` là ước lượng từ thiết bị, không phải cam kết sai số tuyệt đối. Cần đo thực tế ở cổng/hàng rào; không dùng GPS điện thoại để bảo đảm chính xác từng mét hoặc chứng minh hành vi. Tọa độ do thiết bị gửi có thể bị giả mạo.
-
-## Triển khai thực tế
-
-```powershell
-npm run test
+npm test
 npm run build
-npm run start
-# Một tiến trình riêng, cùng MONGODB_URI/MONGODB_DB:
-npm run monitor
+npm run test:api
 ```
 
-Dùng VPS/container Node và reverse proxy HTTPS. Điện thoại phải vào URL HTTPS để cấp quyền vị trí. Production cookie có cờ Secure, HttpOnly, SameSite=Strict. Đặt cả app và monitor dưới trình quản lý tiến trình để tự khởi động lại. Cả app, admin CLI và monitor đều tự nạp `.env.local` và dùng cùng `MONGODB_URI`/`MONGODB_DB`.
+Kiểm thử dùng replica set MongoDB tạm, không ghi dữ liệu thử vào Atlas thật; lần đầu có thể tải MongoDB binary chính thức. Kiểm tra API bao gồm tạo admin trên web, mã dùng một lần, khóa thiết lập, CSRF, phân quyền, cookie, GPS, cảnh báo, API cron và dữ liệu Web Push. Test gửi push dùng transport giả lập, không gửi thông báo thật.
 
-`MONGODB_DB` mặc định là `campus_guard`. Kết nối dùng pool, index email duy nhất, index chống trùng cảnh báo đang hoạt động và TTL index cho phiên đăng nhập/giới hạn thử sai. Cập nhật vị trí và cảnh báo dùng multi-document transaction nên **cần MongoDB replica set hoặc Atlas**, không dùng MongoDB standalone. Không cần persistent filesystem cho database ở máy chạy Next.js. Các file SQLite cũ trong `data/` được giữ nguyên, không bị xóa và không còn được ứng dụng sử dụng.
+`npm run admin` và `npm run monitor` chỉ là tiện ích tùy chọn cho phát triển/VPS. Luồng Vercel sử dụng /setup và GitHub Actions, không yêu cầu người dùng chạy hai lệnh đó.
 
-`APP_ORIGIN` phải bằng origin thực tế của website, ví dụ `https://gps.example.edu.vn` (không có đường dẫn hoặc dấu `/` cuối). Khi thử trong LAN, có thể khai báo danh sách origin tin cậy cách nhau bởi dấu phẩy; HTTP qua IP LAN vẫn không đủ điều kiện dùng GPS. Không lấy `Host`/`X-Forwarded-Host` bất kỳ làm allowlist. Cấu hình này sửa lỗi đăng nhập 403 khi Next lắng nghe trên `0.0.0.0`.
-
-`npm run db:check` kiểm tra kết nối bằng ping, không tạo tài khoản hay dữ liệu mẫu. Nếu thất bại, kiểm tra Atlas Network Access, DNS và quyền database user; không cần mở truy cập cho toàn bộ Internet. Thông tin kết nối phải nằm trong môi trường của máy chủ khi deploy. Các lỗi kết nối trả thông báo chung, không đưa URI hoặc chi tiết driver xuống trình duyệt.
-
-Web không bảo đảm định vị nền Android/iOS. Cần ứng dụng native/hybrid có module định vị nền và quyền phù hợp để triển khai yêu cầu khóa màn hình/chuyển ứng dụng. Backend và thuật toán hiện tại có thể tái sử dụng, nhưng chưa có ứng dụng native trong dự án này. Chưa triển khai lịch ca bắt buộc theo dõi, cấp phép ra ngoài, khôi phục mật khẩu, audit log hay xác minh GPS chống giả mạo.
-
-Bản đồ dùng tile OpenStreetMap (cần mạng và tuân thủ chính sách nhà cung cấp). Chưa có ảnh vệ tinh. Không gửi tọa độ người dùng tới dịch vụ geocoding; tile request vẫn tiết lộ vùng bản đồ đang xem cho nhà cung cấp tile.
-
-## Kiểm tra
-
-`npm test`: kiểm tra hình học, Origin, mật khẩu và workflow MongoDB bằng replica set tạm (`mongodb-memory-server`), bao gồm chống trùng cảnh báo, transaction và phục hồi vị trí. Lần đầu có thể tải MongoDB binary từ máy chủ phân phối chính thức. **Các kiểm thử ghi dữ liệu vào MongoDB tạm, không dùng Atlas được cấu hình trong `.env.local`.** `npm run test:api` (sau build) tự chạy server tạm với `--hostname 0.0.0.0` để kiểm tra cookie, phân quyền, khóa tài khoản, CSRF, ranh giới, GPS và báo cáo.
+Bản đồ dùng tile OpenStreetMap và cần mạng; chưa có ảnh vệ tinh. Chưa có khôi phục mật khẩu, audit log, cấp phép ra ngoài hay chống giả GPS.

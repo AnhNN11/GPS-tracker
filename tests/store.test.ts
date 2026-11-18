@@ -121,3 +121,101 @@ test("Unique emails, login limits and TTL indexes are persisted in MongoDB", asy
   );
   assert.deepEqual((await c.users.findOne({ id }))?.reading, before?.reading);
 });
+test("First-admin setup requires an unexpired one-time token and resists concurrent claims", async () => {
+  const { issueSetupToken, setupStatus, createInitialAdmin } =
+    await import("../src/lib/setup");
+  const code = await issueSetupToken();
+  const input = {
+    name: "Owner",
+    email: "owner@example.invalid",
+    password: "a-strong-owner-password",
+    code,
+  };
+  assert.equal((await setupStatus()).required, true);
+  await assert.rejects(
+    createInitialAdmin({ ...input, code: "wrong".repeat(10) }),
+  );
+  assert.equal(await c.users.countDocuments({ role: "admin" }), 0);
+  await c.runtime.updateOne(
+    { key: "admin_setup" },
+    { $set: { expiresAt: Date.now() - 1 } },
+  );
+  await assert.rejects(createInitialAdmin(input));
+  input.code = await issueSetupToken();
+  const attempts = await Promise.allSettled([
+    createInitialAdmin(input),
+    createInitialAdmin({ ...input, email: "other-owner@example.invalid" }),
+  ]);
+  assert.equal(attempts.filter((a) => a.status === "fulfilled").length, 1);
+  assert.equal(await c.users.countDocuments({ role: "admin" }), 1);
+  assert.equal((await setupStatus()).required, false);
+  assert.equal(
+    (await c.runtime.findOne({ key: "admin_setup" }))?.tokenHash,
+    undefined,
+  );
+  await assert.rejects(issueSetupToken());
+  await assert.rejects(createInitialAdmin(input));
+  // Completion remains locked even if an operator accidentally removes the admin.
+  await c.users.deleteMany({ role: "admin" });
+  assert.equal((await setupStatus()).required, false);
+});
+test("Push delivery retries only failed devices and removes expired subscriptions", async () => {
+  const { savePushDevice, deliverPendingPush } =
+    await import("../src/lib/push");
+  const admin = await createUser(
+    "Push Admin",
+    "push-admin@example.invalid",
+    "a-secure-password",
+    "admin",
+  );
+  const member = await createUser(
+    "Push Member",
+    "push-member@example.invalid",
+    "a-secure-password",
+  );
+  for (const device of ["good", "retry", "expired"])
+    await savePushDevice(admin, {
+      endpoint: "https://fcm.googleapis.com/fcm/send/" + device,
+      keys: { p256dh: "x".repeat(87), auth: "x".repeat(22) },
+    });
+  await setTracking(member, true);
+  await c.users.updateOne(
+    { id: member },
+    { $set: { tracking_started: Date.now() - 10 * 60000 } },
+  );
+  await sweep();
+  const calls: string[] = [];
+  const first = async (subscription: { endpoint: string }) => {
+    calls.push(subscription.endpoint);
+    if (subscription.endpoint.endsWith("retry")) throw { statusCode: 500 };
+    if (subscription.endpoint.endsWith("expired")) throw { statusCode: 410 };
+    return { statusCode: 201, body: "", headers: {} };
+  };
+  const result = await deliverPendingPush(10, first);
+  assert.ok(result.sent >= 1);
+  assert.equal(
+    await c.pushDevices.countDocuments({ endpoint: { $regex: "expired$" } }),
+    0,
+  );
+  const alert = await c.alerts.findOne({
+    user_id: member,
+    type: "stale",
+    active: true,
+  });
+  assert.ok(alert);
+  assert.equal(alert.pushSentAt, undefined);
+  assert.ok(alert.pushDeliveredTo?.length);
+  // Limit the second attempt to this alert; other test alerts are not relevant.
+  await c.alerts.updateMany(
+    { user_id: { $ne: member } },
+    { $set: { pushSentAt: Date.now() } },
+  );
+  await c.alerts.updateOne({ id: alert.id }, { $set: { pushClaimUntil: 0 } });
+  const retried: string[] = [];
+  await deliverPendingPush(1, async (s) => {
+    retried.push(s.endpoint);
+    return { statusCode: 201, body: "", headers: {} };
+  });
+  assert.deepEqual(retried, ["https://fcm.googleapis.com/fcm/send/retry"]);
+  assert.ok((await c.alerts.findOne({ id: alert.id }))?.pushSentAt);
+});

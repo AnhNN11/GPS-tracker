@@ -172,7 +172,7 @@ export async function disableUser(userId: string, enabled: boolean) {
     }
   });
 }
-export async function sweep(now = Date.now()) {
+export async function sweep(now = Date.now(), budgetMs = 30000, limit = 200) {
   const c = await collections(),
     cutoff = now - (await campus(c)).policy.staleMinutes * 60000;
   const ids = await c.users
@@ -180,6 +180,7 @@ export async function sweep(now = Date.now()) {
       {
         tracking: 1,
         enabled: 1,
+        status: { $ne: "stale" },
         $or: [
           { "reading.capturedAt": { $lt: cutoff } },
           { reading: null, tracking_started: { $lt: cutoff } },
@@ -187,14 +188,20 @@ export async function sweep(now = Date.now()) {
       },
       { projection: { id: 1 } },
     )
+    .limit(limit)
     .toArray();
-  for (const { id } of ids)
-    await transaction(async (store, session) => {
+  let flagged = 0,
+    processed = 0;
+  const deadline = Date.now() + budgetMs;
+  for (const { id } of ids) {
+    if (Date.now() > deadline)
+      return { checked: processed, flagged, remaining: true };
+    const changed = await transaction(async (store, session) => {
       const user = await store.users.findOne(
-        { id, tracking: 1, enabled: 1 },
+        { id, tracking: 1, enabled: 1, status: { $ne: "stale" } },
         { session },
       );
-      if (!user) return;
+      if (!user) return false;
       const policy = (await campus(store, session)).policy;
       if (
         now - (user.reading?.capturedAt ?? user.tracking_started ?? now) >
@@ -206,11 +213,17 @@ export async function sweep(now = Date.now()) {
           { $set: { status: "stale", candidate: null } },
           { session },
         );
+        return true;
       }
+      return false;
     });
+    processed++;
+    if (changed) flagged++;
+  }
+  return { checked: ids.length, flagged, remaining: ids.length === limit };
 }
 export async function dashboard(user: UserRow) {
-  await sweep();
+  await sweep(Date.now(), 3000, 20);
   const c = await collections(),
     admin = user.role === "admin";
   const users = await c.users
@@ -231,6 +244,13 @@ export async function dashboard(user: UserRow) {
       user_name: names.get(a.user_id) ?? "Người dùng",
     })),
     me: publicUser(users.find((u) => u.id === user.id) ?? user),
+    monitor:
+      user.role === "admin"
+        ? {
+            lastRunAt:
+              (await c.runtime.findOne({ key: "monitor" }))?.lastRunAt ?? null,
+          }
+        : undefined,
     serverTime: Date.now(),
   };
 }

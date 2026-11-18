@@ -23,6 +23,8 @@ import {
   disableUser,
 } from "@/lib/store";
 import { validPolygon } from "@/lib/geo";
+import { setupStatus, createInitialAdmin } from "@/lib/setup";
+import { pushPublicKey, savePushDevice, deliverPendingPush } from "@/lib/push";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const point = z.object({
@@ -41,7 +43,7 @@ async function body(req: NextRequest) {
   if (text.length > 65536) throw new Error("Yêu cầu quá lớn.");
   return JSON.parse(text);
 }
-async function handler(
+async function handleRequest(
   req: NextRequest,
   ctx: { params: Promise<{ path: string[] }> },
 ) {
@@ -55,7 +57,62 @@ async function handler(
         { status: 403 },
       );
     let result: unknown = { ok: true };
-    if (route === "auth/me" && method === "GET") {
+    if (route === "setup/status" && method === "GET") {
+      result = await setupStatus();
+    } else if (route === "setup" && method === "POST") {
+      const input = credentials
+        .extend({
+          name: z.string().trim().min(2).max(100),
+          password: z.string().min(12).max(128),
+          code: z.string().min(32).max(256),
+        })
+        .parse(await body(req));
+      if (!(await loginAllowed("admin-setup")))
+        return NextResponse.json(
+          { error: "Thử sai quá nhiều. Vui lòng chờ 15 phút." },
+          { status: 429 },
+        );
+      let user;
+      try {
+        user = await createInitialAdmin(input);
+      } catch (e) {
+        await failedLogin("admin-setup");
+        throw e;
+      }
+      await startSession(user.id);
+      result = { user: publicUser(user) };
+    } else if (route === "push/config" && method === "GET") {
+      await requireUser(true);
+      result = { publicKey: await pushPublicKey() };
+    } else if (route === "push/subscribe" && method === "POST") {
+      const user = await requireUser(true);
+      const input = z
+        .object({
+          endpoint: z.url().max(2048),
+          keys: z.object({
+            p256dh: z
+              .string()
+              .min(80)
+              .max(200)
+              .regex(/^[A-Za-z0-9_-]+={0,2}$/),
+            auth: z
+              .string()
+              .min(16)
+              .max(80)
+              .regex(/^[A-Za-z0-9_-]+={0,2}$/),
+          }),
+        })
+        .parse(await body(req));
+      await savePushDevice(user.id, input);
+    } else if (route === "push/unsubscribe" && method === "POST") {
+      const user = await requireUser();
+      const input = z
+        .object({ endpoint: z.string().max(2048) })
+        .parse(await body(req));
+      await (
+        await collections()
+      ).pushDevices.deleteOne({ user_id: user.id, endpoint: input.endpoint });
+    } else if (route === "auth/me" && method === "GET") {
       const user = await sessionUser();
       result = { user: user ? publicUser(user) : null };
     } else if (route === "auth/login" && method === "POST") {
@@ -143,6 +200,7 @@ async function handler(
         })
         .parse(await body(req));
       result = { status: await acceptReading(user.id, input) };
+      await deliverPendingPush(1).catch(() => undefined);
     } else if (path[0] === "alerts" && path.length === 3 && method === "POST") {
       const user = await requireUser(),
         alert = await (await collections()).alerts.findOne({ id: path[1] });
@@ -213,5 +271,13 @@ async function handler(
       { status },
     );
   }
+}
+async function handler(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> },
+) {
+  const response = await handleRequest(req, ctx);
+  response.headers.set("Cache-Control", "no-store");
+  return response;
 }
 export { handler as GET, handler as POST, handler as PUT, handler as PATCH };

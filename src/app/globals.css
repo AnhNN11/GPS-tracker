@@ -1,6 +1,39 @@
 .mobile-logout {
   display: none;
 }
+.setup-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 28px 16px;
+  background: #f3f7f4;
+}
+.setup-card {
+  background: white;
+  border: 1px solid #e1e9e3;
+  padding: 32px;
+  border-radius: 18px;
+  width: 100%;
+  max-width: 490px;
+  box-shadow: 0 15px 60px #123c2710;
+}
+.setup-card h1 {
+  font-size: 25px;
+  line-height: 1.4;
+  letter-spacing: -0.8px;
+  margin: 16px 0 12px;
+}
+.setup-card p {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.setup-card > .ant-alert,
+.setup-card > .ant-btn {
+  margin-top: 16px;
+}
+.setup-card .ant-form {
+  margin-top: 24px;
+}
 @media (max-width: 760px) {
   .mobile-logout {
     display: inline-flex;

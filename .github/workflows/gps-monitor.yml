@@ -1,0 +1,48 @@
+name: GPS production monitor
+on:
+  schedule:
+    - cron: "2-59/5 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+permissions:
+  id-token: write
+concurrency:
+  group: gps-production-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    if: github.repository == 'AnhNN11/GPS-tracker'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Invoke production using a short-lived GitHub identity
+        env:
+          MONITOR_URL: https://gpstracker-one.vercel.app/api/cron
+        run: |
+          node <<'NODE'
+          (async () => {
+            for (let attempt = 0; attempt < 15; attempt++) {
+              const tokenUrl = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+              tokenUrl.searchParams.set('audience', 'campus-guard-monitor');
+              const identity = await fetch(tokenUrl, {
+                headers: { Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+                signal: AbortSignal.timeout(15000)
+              });
+              if (!identity.ok) throw new Error('Could not request workflow identity');
+              const { value } = await identity.json();
+              const response = await fetch(process.env.MONITOR_URL, {
+                headers: { Authorization: `Bearer ${value}` },
+                signal: AbortSignal.timeout(65000)
+              });
+              if (response.ok) {
+                const result = await response.json();
+                console.log(JSON.stringify(result));
+                return;
+              }
+              console.log(`Monitor returned ${response.status}; waiting for production deployment.`);
+              await new Promise(resolve => setTimeout(resolve, 20000));
+            }
+            throw new Error('Production monitor did not become ready');
+          })().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE

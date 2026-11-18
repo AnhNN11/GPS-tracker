@@ -41,6 +41,7 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { Point } from "@/lib/geo";
+import { enableBrowserPush, disableBrowserPush } from "@/lib/browser-push";
 import type { Campus } from "@/lib/store";
 import type { CampusAlert, Person, State } from "@/lib/types";
 const Map = dynamic(() => import("./campus-map"), {
@@ -92,6 +93,7 @@ async function api<T = unknown>(
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
     cache: "no-store",
+    signal: AbortSignal.timeout(25000),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -151,6 +153,7 @@ function Screen() {
   const notified = useRef<Set<string>>(new Set()),
     notificationsOn = useRef(false);
   const sessionEpoch = useRef(0);
+  const alertBaseline = useRef<string | null>(null);
   const refresh = useCallback(async () => {
     const epoch = sessionEpoch.current;
     try {
@@ -243,6 +246,11 @@ function Screen() {
   }, [me?.id, me?.tracking, refresh]);
   useEffect(() => {
     if (!state || me?.role !== "admin") return;
+    if (alertBaseline.current !== me.id) {
+      alertBaseline.current = me.id;
+      state.alerts.forEach((a) => notified.current.add(a.id));
+      return;
+    }
     for (const alert of state.alerts) {
       if (
         !alert.resolved_at &&
@@ -250,20 +258,15 @@ function Screen() {
         !notified.current.has(alert.id)
       ) {
         notified.current.add(alert.id);
-        if (
-          notificationsOn.current &&
-          "Notification" in window &&
-          Notification.permission === "granted"
-        )
-          new Notification(
-            alert.type === "outside"
-              ? "Cảnh báo ngoài khuôn viên"
-              : "Mất cập nhật vị trí",
-            {
-              body: `${alert.user_name} · ${time(alert.created_at)}`,
-              tag: alert.id,
-            },
-          );
+        if (!notificationsOn.current)
+          message.warning({
+            content:
+              (alert.type === "outside"
+                ? "Ngoài khuôn viên: "
+                : "Mất cập nhật: ") + alert.user_name,
+            key: alert.id,
+            duration: 6,
+          });
       }
     }
   }, [state, me?.role]);
@@ -297,6 +300,7 @@ function Screen() {
   }
   async function logout() {
     try {
+      await disableBrowserPush().catch(() => undefined);
       await api("auth/logout", "POST", {});
       sessionEpoch.current++;
       setMe(null);
@@ -304,6 +308,7 @@ function Screen() {
       setConsent(false);
       notificationsOn.current = false;
       notified.current.clear();
+      alertBaseline.current = null;
     } catch (e) {
       message.error((e as Error).message);
     }
@@ -404,7 +409,12 @@ function Screen() {
             <Alert
               type="info"
               title="Lần đầu sử dụng?"
-              description="Quản trị viên chạy npm run admin trên máy chủ để tạo tài khoản đầu tiên. Hệ thống không có mật khẩu mặc định."
+              description={
+                <span>
+                  Chủ sở hữu dùng mã thiết lập riêng để{" "}
+                  <a href="/setup">tạo quản trị viên ngay trên website</a>.
+                </span>
+              }
             />
           </div>
         </section>
@@ -1111,6 +1121,20 @@ function Screen() {
               )}
               {current === "alerts" && (
                 <section className="panel">
+                  {admin && (
+                    <div className="inline-note">
+                      <strong>Giám sát tự động:</strong>{" "}
+                      {state.monitor?.lastRunAt
+                        ? "Nhịp kiểm tra gần nhất " +
+                          time(state.monitor.lastRunAt)
+                        : "Đang chờ lần kiểm tra đầu tiên."}{" "}
+                      Lịch kiểm tra mục tiêu 5 phút/lần và có thể trễ.{" "}
+                      {state.monitor?.lastRunAt &&
+                      Date.now() - state.monitor.lastRunAt > 15 * 60000
+                        ? "Cần kiểm tra lại lịch giám sát."
+                        : ""}
+                    </div>
+                  )}
                   <div className="panel-heading">
                     <div>
                       <h2>Lịch sử cảnh báo</h2>
@@ -1123,29 +1147,26 @@ function Screen() {
                       <Button
                         icon={<BellOutlined />}
                         onClick={async () => {
-                          if (!("Notification" in window)) {
-                            message.info("Trình duyệt chưa hỗ trợ thông báo.");
-                            return;
+                          try {
+                            await enableBrowserPush();
+                            notificationsOn.current = true;
+                            message.success(
+                              "Đã bật thông báo cho thiết bị này, kể cả khi đóng trang.",
+                            );
+                          } catch (e) {
+                            message.error((e as Error).message);
                           }
-                          const permission =
-                            await Notification.requestPermission();
-                          notificationsOn.current = permission === "granted";
-                          message.info(
-                            permission === "granted"
-                              ? "Đã bật thông báo khi trang đang mở."
-                              : "Chưa được cấp quyền thông báo.",
-                          );
                         }}
                       >
-                        Bật thông báo
+                        Nhận thông báo trên thiết bị
                       </Button>
                     )}
                   </div>
                   {admin && (
                     <div className="inline-note">
-                      Cảnh báo được lưu trên máy chủ. Thông báo trình duyệt hiện
-                      hoạt động khi trang đang mở; chưa có Web Push khi đóng
-                      trang.
+                      Cảnh báo được lưu trên máy chủ và gửi tới thiết bị đã bật
+                      thông báo. Trên iPhone, thêm website vào Màn hình chính
+                      rồi bật thông báo trong ứng dụng đó.
                     </div>
                   )}
                   {alertCards(state.alerts)}
