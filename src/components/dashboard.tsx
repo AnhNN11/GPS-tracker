@@ -1,0 +1,1380 @@
+"use client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import {
+  Alert,
+  App,
+  Avatar,
+  Badge,
+  Button,
+  Checkbox,
+  ConfigProvider,
+  Empty,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Spin,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import {
+  AimOutlined,
+  ArrowLeftOutlined,
+  ArrowRightOutlined,
+  BellOutlined,
+  CheckCircleOutlined,
+  DashboardOutlined,
+  EnvironmentOutlined,
+  FieldTimeOutlined,
+  GlobalOutlined,
+  LogoutOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+  SettingOutlined,
+  TeamOutlined,
+  UndoOutlined,
+} from "@ant-design/icons";
+import type { Point } from "@/lib/geo";
+import type { Campus } from "@/lib/store";
+import type { CampusAlert, Person, State } from "@/lib/types";
+const Map = dynamic(() => import("./campus-map"), {
+  ssr: false,
+  loading: () => (
+    <div className="map-loading">
+      <Spin />
+      <span>Đang tải bản đồ…</span>
+    </div>
+  ),
+});
+type Tab = "overview" | "boundary" | "people" | "alerts" | "me";
+const statuses: Record<string, { label: string; color: string }> = {
+  inside: { label: "Trong khuôn viên", color: "green" },
+  outside: { label: "Ngoài khuôn viên", color: "red" },
+  pending: { label: "Đang xác nhận", color: "gold" },
+  uncertain: { label: "GPS chưa rõ", color: "default" },
+  stale: { label: "Mất cập nhật", color: "orange" },
+  unknown: { label: "Chưa có vị trí", color: "default" },
+  unconfigured: { label: "Chưa có ranh giới", color: "default" },
+};
+const time = (v: number | null) =>
+  v
+    ? new Date(v).toLocaleString("vi-VN", {
+        timeZone: "Asia/Ho_Chi_Minh",
+        hour: "2-digit",
+        minute: "2-digit",
+        day: "2-digit",
+        month: "2-digit",
+      })
+    : "Chưa cập nhật";
+function Status({ person }: { person: Person }) {
+  const s = !person.tracking
+    ? { label: "Chưa chia sẻ", color: "default" }
+    : (statuses[person.status] ?? statuses.unknown);
+  return (
+    <Tag color={s.color} bordered={false}>
+      {s.label}
+    </Tag>
+  );
+}
+async function api<T = unknown>(
+  route: string,
+  method = "GET",
+  body?: unknown,
+): Promise<T> {
+  const response = await fetch(`/api/${route}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+    cache: "no-store",
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const err = new Error(
+      data.error || "Không thể kết nối máy chủ.",
+    ) as Error & { status: number };
+    err.status = response.status;
+    throw err;
+  }
+  return data;
+}
+export default function Dashboard() {
+  return (
+    <ConfigProvider
+      theme={{
+        token: {
+          colorPrimary: "#167d68",
+          colorInfo: "#167d68",
+          borderRadius: 10,
+          fontFamily: "Arial, Helvetica, sans-serif",
+          colorText: "#20332d",
+          colorBorder: "#e2e8e5",
+          controlHeight: 40,
+        },
+        components: {
+          Table: { headerBg: "#f5f8f6", headerColor: "#708078" },
+          Modal: { borderRadiusLG: 16 },
+        },
+      }}
+    >
+      <App>
+        <Screen />
+      </App>
+    </ConfigProvider>
+  );
+}
+function Screen() {
+  const { message } = App.useApp();
+  const [me, setMe] = useState<Person | null>(null),
+    [ready, setReady] = useState(false),
+    [state, setState] = useState<State | null>(null),
+    [tab, setTab] = useState<Tab>("overview"),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const [createOpen, setCreateOpen] = useState(false),
+    [boundaryOpen, setBoundaryOpen] = useState(false),
+    [draft, setDraft] = useState<Point[]>([]),
+    [focus, setFocus] = useState<Point | null>(null),
+    [query, setQuery] = useState("");
+  const [consent, setConsent] = useState(false),
+    [gpsError, setGpsError] = useState(""),
+    [report, setReport] = useState<CampusAlert | null>(null),
+    [reportText, setReportText] = useState("");
+  const [userForm] = Form.useForm(),
+    [campusForm] = Form.useForm(),
+    [loginForm] = Form.useForm();
+  const notified = useRef<Set<string>>(new Set()),
+    notificationsOn = useRef(false);
+  const sessionEpoch = useRef(0);
+  const refresh = useCallback(async () => {
+    const epoch = sessionEpoch.current;
+    try {
+      const next = await api<State>("state");
+      if (epoch !== sessionEpoch.current) return;
+      setState(next);
+      setMe(next.me);
+      setError("");
+    } catch (e) {
+      if (epoch !== sessionEpoch.current) return;
+      if ((e as Error & { status?: number }).status === 401) {
+        setMe(null);
+        setState(null);
+      } else setError((e as Error).message);
+    }
+  }, []);
+  useEffect(() => {
+    api<{ user: Person | null }>("auth/me")
+      .then(async (r) => {
+        setMe(r.user);
+        if (r.user) await refresh();
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setReady(true));
+  }, [refresh]);
+  useEffect(() => {
+    if (!me) return;
+    const id = setInterval(refresh, 15000);
+    return () => clearInterval(id);
+  }, [me?.id, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!me?.tracking) return;
+    if (!navigator.geolocation) {
+      setGpsError("Trình duyệt không hỗ trợ định vị.");
+      return;
+    }
+    let active = true,
+      inFlight = false;
+    const send = () => {
+      if (inFlight) return;
+      inFlight = true;
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          if (!active) {
+            inFlight = false;
+            return;
+          }
+          try {
+            await api("location", "POST", {
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+              accuracy: position.coords.accuracy,
+              capturedAt: Math.round(position.timestamp),
+            });
+            if (active) {
+              setGpsError("");
+              await refresh();
+            }
+          } catch (e) {
+            if (active) setGpsError((e as Error).message);
+          } finally {
+            inFlight = false;
+          }
+        },
+        (e) => {
+          inFlight = false;
+          if (active)
+            setGpsError(
+              e.code === 1
+                ? "Chưa được cấp quyền vị trí. Hãy bật quyền vị trí cho trang này."
+                : e.code === 2
+                  ? "Không lấy được vị trí GPS. Hãy thử ở nơi thoáng hơn."
+                  : "Lấy vị trí quá lâu. Ứng dụng sẽ thử lại.",
+            );
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 18000 },
+      );
+    };
+    send();
+    const id = setInterval(send, 20000);
+    const onVisible = () => {
+      if (!document.hidden) send();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      active = false;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [me?.id, me?.tracking, refresh]);
+  useEffect(() => {
+    if (!state || me?.role !== "admin") return;
+    for (const alert of state.alerts) {
+      if (
+        !alert.resolved_at &&
+        !alert.acknowledged_at &&
+        !notified.current.has(alert.id)
+      ) {
+        notified.current.add(alert.id);
+        if (
+          notificationsOn.current &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        )
+          new Notification(
+            alert.type === "outside"
+              ? "Cảnh báo ngoài khuôn viên"
+              : "Mất cập nhật vị trí",
+            {
+              body: `${alert.user_name} · ${time(alert.created_at)}`,
+              tag: alert.id,
+            },
+          );
+      }
+    }
+  }, [state, me?.role]);
+  async function act(action: () => Promise<unknown>, success?: string) {
+    setBusy(true);
+    try {
+      await action();
+      if (success) message.success(success);
+      await refresh();
+      return true;
+    } catch (e) {
+      message.error((e as Error).message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function login(values: unknown) {
+    setBusy(true);
+    try {
+      const r = await api<{ user: Person }>("auth/login", "POST", values);
+      sessionEpoch.current++;
+      setMe(r.user);
+      await refresh();
+      loginForm.resetFields();
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function logout() {
+    try {
+      await api("auth/logout", "POST", {});
+      sessionEpoch.current++;
+      setMe(null);
+      setState(null);
+      setConsent(false);
+      notificationsOn.current = false;
+      notified.current.clear();
+    } catch (e) {
+      message.error((e as Error).message);
+    }
+  }
+  const admin = me?.role === "admin";
+  if (!ready)
+    return (
+      <div className="boot">
+        <Spin size="large" />
+        <p>Đang kết nối Campus Guard…</p>
+      </div>
+    );
+  if (!me)
+    return (
+      <main className="login">
+        <section className="login-story">
+          <a className="brand">
+            <span className="brand-symbol">
+              <SafetyCertificateOutlined />
+            </span>
+            Campus<span>Guard</span>
+          </a>
+          <div>
+            <div className="eyebrow">KẾT NỐI ĐỂ AN TÂM</div>
+            <h1>
+              Một khuôn viên.
+              <br />
+              Mọi kết nối
+              <br />
+              <em>trong tầm nhìn.</em>
+            </h1>
+            <p>
+              Quản lý vị trí và theo dõi ranh giới trường học
+              <br />
+              trên một không gian chung.
+            </p>
+            <div className="school-stamp">
+              <EnvironmentOutlined />
+              <span>
+                Phân hiệu 1<br />
+                <strong>Trường Thiếu sinh quân miền Trung</strong>
+                <small>Phường Thống Nhất · Pleiku · Gia Lai</small>
+              </span>
+            </div>
+          </div>
+          <small>Định vị minh bạch. Cảnh báo rõ ràng.</small>
+        </section>
+        <section className="login-panel">
+          <div className="login-form">
+            <div className="eyebrow">CHÀO MỪNG TRỞ LẠI</div>
+            <h2>Đăng nhập hệ thống</h2>
+            <p className="muted">
+              Sử dụng tài khoản do quản trị viên cung cấp.
+            </p>
+            {error && <Alert type="error" title={error} showIcon />}
+            <Form form={loginForm} layout="vertical" onFinish={login}>
+              <Form.Item
+                name="email"
+                label="Địa chỉ email"
+                rules={[
+                  {
+                    required: true,
+                    type: "email",
+                    message: "Nhập email hợp lệ.",
+                  },
+                ]}
+              >
+                <Input
+                  autoComplete="username"
+                  placeholder="ten@truong.edu.vn"
+                />
+              </Form.Item>
+              <Form.Item
+                name="password"
+                label="Mật khẩu"
+                rules={[{ required: true, message: "Nhập mật khẩu." }]}
+              >
+                <Input.Password
+                  autoComplete="current-password"
+                  placeholder="Mật khẩu của bạn"
+                />
+              </Form.Item>
+              <Button
+                type="primary"
+                htmlType="submit"
+                block
+                loading={busy}
+                icon={<ArrowRightOutlined />}
+                iconPlacement="end"
+              >
+                Đăng nhập
+              </Button>
+            </Form>
+            <p className="login-help">
+              <SafetyCertificateOutlined /> Tài khoản và vị trí được phân quyền
+              truy cập.
+            </p>
+            <Alert
+              type="info"
+              title="Lần đầu sử dụng?"
+              description="Quản trị viên chạy npm run admin trên máy chủ để tạo tài khoản đầu tiên. Hệ thống không có mật khẩu mặc định."
+            />
+          </div>
+        </section>
+      </main>
+    );
+  const activeAlerts = state?.alerts.filter((a) => !a.resolved_at) ?? [],
+    people = state?.users ?? [],
+    campus = state?.campus;
+  const visiblePeople = people.filter((p) =>
+    `${p.name} ${p.email}`.toLowerCase().includes(query.toLowerCase()),
+  );
+  const navigation: { key: Tab; icon: React.ReactNode; label: string }[] = admin
+    ? [
+        { key: "overview", icon: <DashboardOutlined />, label: "Tổng quan" },
+        {
+          key: "boundary",
+          icon: <EnvironmentOutlined />,
+          label: "Khuôn viên trường",
+        },
+        { key: "people", icon: <TeamOutlined />, label: "Tài khoản" },
+        { key: "alerts", icon: <BellOutlined />, label: "Cảnh báo" },
+        { key: "me", icon: <AimOutlined />, label: "Vị trí của tôi" },
+      ]
+    : [
+        { key: "me", icon: <AimOutlined />, label: "Vị trí của tôi" },
+        { key: "alerts", icon: <BellOutlined />, label: "Cảnh báo & báo cáo" },
+      ];
+  const current = admin ? tab : tab === "alerts" ? "alerts" : "me";
+  const title = navigation.find((n) => n.key === current)?.label ?? "Tổng quan";
+  const peopleColumns = [
+    {
+      title: "NGƯỜI DÙNG",
+      key: "name",
+      render: (_: unknown, p: Person) => (
+        <div className="person">
+          <Avatar style={{ background: "#e8f1ed", color: "#167d68" }}>
+            {p.name.charAt(0)}
+          </Avatar>
+          <span>
+            <strong>{p.name}</strong>
+            <small>{p.email}</small>
+          </span>
+        </div>
+      ),
+    },
+    {
+      title: "TRẠNG THÁI",
+      key: "status",
+      render: (_: unknown, p: Person) => <Status person={p} />,
+    },
+    {
+      title: "CẬP NHẬT CUỐI",
+      key: "time",
+      render: (_: unknown, p: Person) => (
+        <span className="muted">{time(p.reading?.capturedAt ?? null)}</span>
+      ),
+    },
+    {
+      title: "SAI SỐ GPS",
+      key: "accuracy",
+      render: (_: unknown, p: Person) =>
+        p.reading ? `±${Math.round(p.reading.accuracy)} m` : "—",
+    },
+    {
+      title: "",
+      key: "actions",
+      render: (_: unknown, p: Person) => (
+        <Space>
+          {p.reading && (
+            <Button
+              type="text"
+              icon={<AimOutlined />}
+              aria-label={`Xem vị trí ${p.name}`}
+              onClick={() => {
+                setFocus(p.reading);
+                setTab("overview");
+              }}
+            />
+          )}
+          {current === "people" && p.role !== "admin" && (
+            <Button
+              size="small"
+              danger={p.enabled}
+              onClick={() =>
+                act(
+                  () => api(`users/${p.id}`, "PATCH", { enabled: !p.enabled }),
+                  p.enabled ? "Đã khóa tài khoản" : "Đã mở tài khoản",
+                )
+              }
+            >
+              {p.enabled ? "Khóa" : "Mở khóa"}
+            </Button>
+          )}
+          {!p.enabled && <Tag>Đã khóa</Tag>}
+        </Space>
+      ),
+    },
+  ];
+  function openBoundary() {
+    setDraft(campus?.polygon ?? []);
+    campusForm.setFieldsValue(campus);
+    setTab("boundary");
+    setBoundaryOpen(true);
+  }
+  async function saveBoundary() {
+    try {
+      const values = await campusForm.validateFields();
+      if (
+        await act(
+          () => api("campus", "PUT", { ...values, polygon: draft }),
+          "Đã lưu ranh giới và cấu hình",
+        )
+      )
+        setBoundaryOpen(false);
+    } catch {
+      /* Form shows validation errors. */
+    }
+  }
+  const alertCards = (alerts: CampusAlert[]) =>
+    alerts.length ? (
+      <div className="alert-list">
+        {alerts.map((a) => (
+          <article
+            className={`event ${a.resolved_at ? "resolved" : a.type}`}
+            key={a.id}
+          >
+            <span className="event-icon">
+              {a.type === "outside" ? (
+                <EnvironmentOutlined />
+              ) : (
+                <FieldTimeOutlined />
+              )}
+            </span>
+            <div className="event-content">
+              <div className="event-heading">
+                <strong>{a.user_name}</strong>
+                <Tag
+                  color={
+                    a.resolved_at
+                      ? "default"
+                      : a.type === "outside"
+                        ? "red"
+                        : "orange"
+                  }
+                  bordered={false}
+                >
+                  {a.resolved_at
+                    ? "Đã kết thúc"
+                    : a.type === "outside"
+                      ? "Ngoài khuôn viên"
+                      : "Mất cập nhật"}
+                </Tag>
+              </div>
+              <p>
+                {a.type === "outside"
+                  ? "Vị trí nằm ngoài ranh giới qua các mẫu xác nhận."
+                  : "Không có mẫu vị trí mới trong thời gian cho phép."}
+              </p>
+              <small>
+                {time(a.created_at)}
+                {a.acknowledged_at ? " · Admin đã ghi nhận" : ""}
+              </small>
+              {a.report ? (
+                <div className="report-text">
+                  <strong>Báo cáo:</strong> {a.report}
+                </div>
+              ) : (
+                <span className="no-report">
+                  Chưa có báo cáo của người dùng
+                </span>
+              )}
+            </div>
+            {admin ? (
+              !a.acknowledged_at && (
+                <Button
+                  size="small"
+                  onClick={() =>
+                    act(
+                      () => api(`alerts/${a.id}/ack`, "POST", {}),
+                      "Đã ghi nhận cảnh báo",
+                    )
+                  }
+                >
+                  Ghi nhận
+                </Button>
+              )
+            ) : (
+              <Button
+                size="small"
+                onClick={() => {
+                  setReport(a);
+                  setReportText(a.report ?? "");
+                }}
+              >
+                {a.report ? "Sửa báo cáo" : "Gửi báo cáo"}
+              </Button>
+            )}
+          </article>
+        ))}
+      </div>
+    ) : (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="Chưa có cảnh báo"
+      />
+    );
+  return (
+    <div className="shell">
+      <aside className="sidebar">
+        <a className="brand" onClick={() => setTab(admin ? "overview" : "me")}>
+          <span className="brand-symbol">
+            <SafetyCertificateOutlined />
+          </span>
+          Campus<span>Guard</span>
+        </a>
+        <div className="workspace">
+          <span className="workspace-icon">PH1</span>
+          <div>
+            <strong>Thiếu sinh quân miền Trung</strong>
+            <small>Phân hiệu 1 · Pleiku</small>
+          </div>
+        </div>
+        <div className="nav-label">KHÔNG GIAN QUẢN LÝ</div>
+        <nav>
+          {navigation.map((n) => (
+            <button
+              key={n.key}
+              className={current === n.key ? "selected" : ""}
+              onClick={() => {
+                setTab(n.key);
+                setBoundaryOpen(false);
+              }}
+            >
+              {n.icon}
+              <span>{n.label}</span>
+              {n.key === "alerts" && activeAlerts.length > 0 && (
+                <b>{activeAlerts.length}</b>
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-note">
+          <SafetyCertificateOutlined />
+          <strong>Theo dõi có trách nhiệm</strong>
+          <p>Vị trí được chia sẻ khi người dùng bật theo dõi và cấp quyền.</p>
+        </div>
+        <div className="profile">
+          <Avatar style={{ background: "#e3eee8", color: "#167d68" }}>
+            {me.name.charAt(0)}
+          </Avatar>
+          <span>
+            <strong>{me.name}</strong>
+            <small>{admin ? "Quản trị viên" : "Người dùng"}</small>
+          </span>
+          <Tooltip title="Đăng xuất">
+            <Button type="text" icon={<LogoutOutlined />} onClick={logout} />
+          </Tooltip>
+        </div>
+      </aside>
+      <div className="main">
+        <header className="topbar">
+          <span>
+            Không gian trường học <span className="slash">/</span>{" "}
+            <strong>{title}</strong>
+          </span>
+          <Space>
+            <span className="live">
+              <i /> {error ? "Mất kết nối máy chủ" : "Máy chủ trực tuyến"}
+            </span>
+            <Tooltip title="Làm mới">
+              <Button type="text" icon={<ReloadOutlined />} onClick={refresh} />
+            </Tooltip>
+            <Badge count={activeAlerts.length} size="small">
+              <Button
+                type="text"
+                aria-label="Mở cảnh báo"
+                icon={<BellOutlined />}
+                onClick={() => setTab("alerts")}
+              />
+            </Badge>
+            <Button
+              className="mobile-logout"
+              type="text"
+              aria-label="Đăng xuất"
+              icon={<LogoutOutlined />}
+              onClick={logout}
+            />
+          </Space>
+        </header>
+        <main className="content">
+          <div className="page-heading">
+            <div>
+              <div className="eyebrow">
+                CAMPUS GUARD / {admin ? "QUẢN TRỊ" : "CÁ NHÂN"}
+              </div>
+              <h1>{current === "overview" ? "Tổng quan khuôn viên" : title}</h1>
+              <p>
+                {current === "overview"
+                  ? "Nắm bắt vị trí, kết nối và an toàn trong khuôn viên."
+                  : current === "boundary"
+                    ? "Thiết lập ranh giới theo đúng hàng rào thực tế của trường."
+                    : current === "people"
+                      ? "Cấp tài khoản và quản lý quyền truy cập của người dùng."
+                      : current === "alerts"
+                        ? "Theo dõi sự kiện và báo cáo của người dùng."
+                        : "Chủ động chia sẻ và kiểm tra vị trí của bạn."}
+              </p>
+            </div>
+            <Space>
+              {current === "people" ? (
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={() => setCreateOpen(true)}
+                >
+                  Tạo tài khoản
+                </Button>
+              ) : admin &&
+                (current === "overview" || current === "boundary") ? (
+                <Button
+                  type="primary"
+                  icon={<SettingOutlined />}
+                  onClick={openBoundary}
+                >
+                  {campus?.polygon.length
+                    ? "Chỉnh sửa ranh giới"
+                    : "Thiết lập khuôn viên"}
+                </Button>
+              ) : null}
+            </Space>
+          </div>
+          {error && (
+            <Alert
+              type="error"
+              showIcon
+              title={error}
+              style={{ marginBottom: 20 }}
+            />
+          )}
+          {!state ? (
+            <div className="loading-panel">
+              <Spin />
+            </div>
+          ) : (
+            <>
+              {(current === "overview" || current === "boundary") &&
+                !campus?.polygon.length && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="Cần xác nhận ranh giới khuôn viên"
+                    description="Bản đồ đang ở khu vực Pleiku, chưa phải ranh giới thực tế. Vẽ và lưu khuôn viên để bắt đầu kiểm tra vượt vùng."
+                    action={
+                      <Button onClick={openBoundary}>Vẽ ranh giới</Button>
+                    }
+                    style={{ marginBottom: 20 }}
+                  />
+                )}
+              {current === "overview" && (
+                <>
+                  <section className="stats">
+                    {[
+                      {
+                        label: "Tài khoản người dùng",
+                        value: people.filter((p) => p.role === "member").length,
+                        detail: "Tài khoản do admin cấp",
+                        icon: <TeamOutlined />,
+                        className: "green",
+                      },
+                      {
+                        label: "Trong khuôn viên",
+                        value: people.filter(
+                          (p) => p.tracking && p.status === "inside",
+                        ).length,
+                        detail: "GPS xác nhận trong ranh giới",
+                        icon: <CheckCircleOutlined />,
+                        className: "green",
+                      },
+                      {
+                        label: "Ngoài khuôn viên",
+                        value: people.filter(
+                          (p) => p.tracking && p.status === "outside",
+                        ).length,
+                        detail: "Đã qua bước xác nhận",
+                        icon: <EnvironmentOutlined />,
+                        className: "red",
+                      },
+                      {
+                        label: "Mất cập nhật",
+                        value: people.filter(
+                          (p) => p.tracking && p.status === "stale",
+                        ).length,
+                        detail: `Quá ${campus?.policy.staleMinutes} phút không có vị trí`,
+                        icon: <FieldTimeOutlined />,
+                        className: "amber",
+                      },
+                    ].map((s) => (
+                      <div className="stat" key={s.label}>
+                        <div>
+                          <span>{s.label}</span>
+                          <span className={`stat-icon ${s.className}`}>
+                            {s.icon}
+                          </span>
+                        </div>
+                        <strong>{s.value.toString().padStart(2, "0")}</strong>
+                        <small>{s.detail}</small>
+                      </div>
+                    ))}
+                  </section>
+                  <section className="overview-grid">
+                    <div className="panel map-panel">
+                      <div className="panel-heading">
+                        <div>
+                          <h2>Bản đồ khuôn viên</h2>
+                          <p>{campus?.address}</p>
+                        </div>
+                        <Tag bordered={false} color="green">
+                          <GlobalOutlined /> OpenStreetMap
+                        </Tag>
+                      </div>
+                      <div className="map-wrap">
+                        <Map
+                          polygon={campus?.polygon ?? []}
+                          people={people}
+                          focus={focus}
+                        />
+                        {!people.some((p) => p.reading) && (
+                          <div className="map-overlay">
+                            <AimOutlined /> Chưa có vị trí được chia sẻ
+                          </div>
+                        )}
+                      </div>
+                      <div className="map-legend">
+                        <span>
+                          <i className="dot green" />
+                          Trong khuôn viên
+                        </span>
+                        <span>
+                          <i className="dot red" />
+                          Ngoài khuôn viên
+                        </span>
+                        <span>
+                          <i className="dot amber" />
+                          Mất cập nhật
+                        </span>
+                        <span>Vòng tròn = sai số GPS</span>
+                      </div>
+                    </div>
+                    <div className="panel activity">
+                      <div className="panel-heading">
+                        <h2>Cảnh báo gần đây</h2>
+                        <Badge count={activeAlerts.length} color="#d28d18" />
+                      </div>
+                      {alertCards(state.alerts.slice(0, 3))}
+                      <Button
+                        type="text"
+                        className="view-all"
+                        onClick={() => setTab("alerts")}
+                      >
+                        Xem tất cả cảnh báo <ArrowRightOutlined />
+                      </Button>
+                    </div>
+                  </section>
+                  <section className="panel">
+                    <div className="panel-heading">
+                      <div>
+                        <h2>Trạng thái người dùng</h2>
+                        <p>
+                          Chỉ hiển thị vị trí cuối cùng đã nhận, không suy đoán
+                          vị trí hiện tại.
+                        </p>
+                      </div>
+                      <Button type="text" onClick={() => setTab("people")}>
+                        Quản lý tài khoản <ArrowRightOutlined />
+                      </Button>
+                    </div>
+                    <Table
+                      rowKey="id"
+                      columns={peopleColumns}
+                      dataSource={people.slice(0, 6)}
+                      pagination={false}
+                      scroll={{ x: 680 }}
+                      locale={{
+                        emptyText: (
+                          <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description="Tạo tài khoản để bắt đầu kết nối người dùng"
+                          />
+                        ),
+                      }}
+                    />
+                  </section>
+                </>
+              )}
+              {current === "boundary" && (
+                <div className="boundary-grid">
+                  <section className="panel map-panel">
+                    <div className="panel-heading">
+                      <div>
+                        <h2>
+                          {boundaryOpen
+                            ? "Đang vẽ ranh giới"
+                            : "Ranh giới khuôn viên"}
+                        </h2>
+                        <p>
+                          {boundaryOpen
+                            ? "Nhấp lần lượt các góc theo hàng rào. Đường cuối sẽ tự nối về điểm đầu."
+                            : "Ranh giới do quản trị viên xác nhận."}
+                        </p>
+                      </div>
+                      <Tag>
+                        {
+                          (boundaryOpen ? draft : (campus?.polygon ?? []))
+                            .length
+                        }{" "}
+                        đỉnh
+                      </Tag>
+                    </div>
+                    <Map
+                      polygon={boundaryOpen ? draft : (campus?.polygon ?? [])}
+                      drawing={boundaryOpen}
+                      onPoint={(p) => setDraft((d) => [...d, p])}
+                      focus={focus}
+                    />
+                    <div className="map-tools">
+                      <Button
+                        icon={<AimOutlined />}
+                        onClick={() =>
+                          navigator.geolocation?.getCurrentPosition(
+                            (p) =>
+                              setFocus({
+                                lat: p.coords.latitude,
+                                lng: p.coords.longitude,
+                              }),
+                            () =>
+                              message.error(
+                                "Không lấy được vị trí. Kiểm tra quyền GPS.",
+                              ),
+                          )
+                        }
+                      >
+                        Đến vị trí của tôi
+                      </Button>
+                      {boundaryOpen && (
+                        <>
+                          <Button
+                            icon={<UndoOutlined />}
+                            disabled={!draft.length}
+                            onClick={() => setDraft((d) => d.slice(0, -1))}
+                          >
+                            Bỏ điểm cuối
+                          </Button>
+                          <Button
+                            danger
+                            disabled={!draft.length}
+                            onClick={() => setDraft([])}
+                          >
+                            Vẽ lại
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </section>
+                  <section className="panel boundary-settings">
+                    <div className="panel-heading">
+                      <h2>
+                        {boundaryOpen
+                          ? "Thiết lập khuôn viên"
+                          : "Cách hệ thống đo"}
+                      </h2>
+                    </div>
+                    {boundaryOpen ? (
+                      <>
+                        <Form form={campusForm} layout="vertical">
+                          <Form.Item
+                            label="Tên trường"
+                            name="name"
+                            rules={[{ required: true }]}
+                          >
+                            <Input />
+                          </Form.Item>
+                          <Form.Item
+                            label="Địa chỉ"
+                            name="address"
+                            rules={[{ required: true }]}
+                          >
+                            <Input.TextArea rows={2} />
+                          </Form.Item>
+                          <div className="form-pair">
+                            <Form.Item
+                              label="Vùng đệm (m)"
+                              name={["policy", "buffer"]}
+                              rules={[{ required: true }]}
+                            >
+                              <InputNumber min={0} max={100} />
+                            </Form.Item>
+                            <Form.Item
+                              label="Sai số tối đa (m)"
+                              name={["policy", "maxAccuracy"]}
+                              rules={[{ required: true }]}
+                            >
+                              <InputNumber min={5} max={200} />
+                            </Form.Item>
+                            <Form.Item
+                              label="Xác nhận ngoài (giây)"
+                              name={["policy", "confirmSeconds"]}
+                              rules={[{ required: true }]}
+                            >
+                              <InputNumber min={10} max={300} />
+                            </Form.Item>
+                            <Form.Item
+                              label="Mất cập nhật (phút)"
+                              name={["policy", "staleMinutes"]}
+                              rules={[{ required: true }]}
+                            >
+                              <InputNumber min={2} max={60} />
+                            </Form.Item>
+                          </div>
+                        </Form>
+                        <Alert
+                          type="info"
+                          title="Không thể đo chính xác đến hàng rào"
+                          description="Điểm nằm sát ranh giới hoặc sai số GPS lớn sẽ được đánh dấu chưa rõ, tránh cảnh báo nhầm."
+                        />
+                        <Space style={{ marginTop: 20 }}>
+                          <Button
+                            type="primary"
+                            disabled={draft.length < 3}
+                            loading={busy}
+                            onClick={saveBoundary}
+                          >
+                            Lưu khuôn viên
+                          </Button>
+                          <Button onClick={() => setBoundaryOpen(false)}>
+                            Hủy
+                          </Button>
+                        </Space>
+                      </>
+                    ) : (
+                      <>
+                        <ol className="steps">
+                          <li>
+                            <strong>Vẽ theo hàng rào</strong>
+                            <p>
+                              Lưu đường đa giác bao quanh khuôn viên, bao gồm
+                              các góc và cổng trường.
+                            </p>
+                          </li>
+                          <li>
+                            <strong>Xét cả sai số GPS</strong>
+                            <p>
+                              Chỉ tính ngoài khi khoảng cách tới ranh giới lớn
+                              hơn sai số GPS + vùng đệm {campus?.policy.buffer}{" "}
+                              m.
+                            </p>
+                          </li>
+                          <li>
+                            <strong>Xác nhận nhiều mẫu</strong>
+                            <p>
+                              Ít nhất 2 mẫu liên tiếp, kéo dài{" "}
+                              {campus?.policy.confirmSeconds} giây. Mẫu không rõ
+                              sẽ ngắt chuỗi xác nhận.
+                            </p>
+                          </li>
+                          <li>
+                            <strong>Phát hiện mất cập nhật</strong>
+                            <p>
+                              Máy chủ tạo cảnh báo sau{" "}
+                              {campus?.policy.staleMinutes} phút không có vị trí
+                              mới.
+                            </p>
+                          </li>
+                        </ol>
+                        <Button block type="primary" onClick={openBoundary}>
+                          Chỉnh sửa ranh giới
+                        </Button>
+                      </>
+                    )}
+                  </section>
+                </div>
+              )}
+              {current === "people" && (
+                <section className="panel">
+                  <div className="panel-heading">
+                    <h2>
+                      Danh sách tài khoản{" "}
+                      <span className="count">{people.length}</span>
+                    </h2>
+                    <Input.Search
+                      aria-label="Tìm người dùng"
+                      placeholder="Tìm tên hoặc email…"
+                      style={{ maxWidth: 280 }}
+                      onChange={(e) => setQuery(e.target.value)}
+                    />
+                  </div>
+                  <Table
+                    rowKey="id"
+                    columns={peopleColumns}
+                    dataSource={visiblePeople}
+                    pagination={{ pageSize: 10, showSizeChanger: false }}
+                    scroll={{ x: 760 }}
+                  />
+                </section>
+              )}
+              {current === "alerts" && (
+                <section className="panel">
+                  <div className="panel-heading">
+                    <div>
+                      <h2>Lịch sử cảnh báo</h2>
+                      <p>
+                        {activeAlerts.length} cảnh báo đang hoạt động ·{" "}
+                        {state.alerts.length} sự kiện gần nhất
+                      </p>
+                    </div>
+                    {admin && (
+                      <Button
+                        icon={<BellOutlined />}
+                        onClick={async () => {
+                          if (!("Notification" in window)) {
+                            message.info("Trình duyệt chưa hỗ trợ thông báo.");
+                            return;
+                          }
+                          const permission =
+                            await Notification.requestPermission();
+                          notificationsOn.current = permission === "granted";
+                          message.info(
+                            permission === "granted"
+                              ? "Đã bật thông báo khi trang đang mở."
+                              : "Chưa được cấp quyền thông báo.",
+                          );
+                        }}
+                      >
+                        Bật thông báo
+                      </Button>
+                    )}
+                  </div>
+                  {admin && (
+                    <div className="inline-note">
+                      Cảnh báo được lưu trên máy chủ. Thông báo trình duyệt hiện
+                      hoạt động khi trang đang mở; chưa có Web Push khi đóng
+                      trang.
+                    </div>
+                  )}
+                  {alertCards(state.alerts)}
+                </section>
+              )}
+              {current === "me" && (
+                <>
+                  <Alert
+                    showIcon
+                    type="warning"
+                    title="Giới hạn của phiên bản web"
+                    description="Giữ trang mở để gửi vị trí, mục tiêu mỗi 20 giây. Khóa màn hình hoặc chuyển ứng dụng có thể dừng cập nhật. Muốn định vị nền ổn định cần bổ sung ứng dụng Android/iOS."
+                    style={{ marginBottom: 22 }}
+                  />
+                  <div className="personal-grid">
+                    <section className="panel personal-card">
+                      <div className="personal-pin">
+                        <AimOutlined />
+                      </div>
+                      <h2>Vị trí của {me.name}</h2>
+                      <Status person={me} />
+                      <p className="muted">
+                        Lần cập nhật cuối:{" "}
+                        {time(me.reading?.capturedAt ?? null)}
+                      </p>
+                      {me.reading && (
+                        <div className="coordinate">
+                          <span>Vĩ độ / kinh độ</span>
+                          <strong>
+                            {me.reading.lat.toFixed(6)},{" "}
+                            {me.reading.lng.toFixed(6)}
+                          </strong>
+                          <span>
+                            Sai số ước tính: ±{Math.round(me.reading.accuracy)}{" "}
+                            m
+                          </span>
+                        </div>
+                      )}
+                      {gpsError && (
+                        <Alert
+                          type="error"
+                          showIcon
+                          title={gpsError}
+                          style={{ marginBottom: 16 }}
+                        />
+                      )}
+                      {!me.tracking ? (
+                        <>
+                          <Checkbox
+                            checked={consent}
+                            onChange={(e) => setConsent(e.target.checked)}
+                          >
+                            Tôi đồng ý chia sẻ vị trí với quản trị viên để quản
+                            lý khuôn viên trường.
+                          </Checkbox>
+                          <Button
+                            type="primary"
+                            size="large"
+                            block
+                            disabled={!consent}
+                            loading={busy}
+                            icon={<AimOutlined />}
+                            onClick={() =>
+                              act(
+                                () =>
+                                  api("tracking", "POST", {
+                                    enabled: true,
+                                    consent,
+                                  }),
+                                "Đã bật chia sẻ vị trí",
+                              )
+                            }
+                          >
+                            Bắt đầu chia sẻ
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Alert
+                            type="success"
+                            showIcon
+                            title="Đang bật chia sẻ vị trí"
+                            description="Hệ thống có thể cảnh báo admin nếu mất cập nhật."
+                          />
+                          <Button
+                            block
+                            danger
+                            loading={busy}
+                            onClick={() =>
+                              act(
+                                () =>
+                                  api("tracking", "POST", {
+                                    enabled: false,
+                                    consent: false,
+                                  }),
+                                "Đã dừng chia sẻ vị trí",
+                              )
+                            }
+                          >
+                            Dừng chia sẻ vị trí
+                          </Button>
+                        </>
+                      )}
+                      <small>
+                        Quyền vị trí phải được cấp trong trình duyệt. Điện thoại
+                        truy cập qua HTTPS.
+                      </small>
+                    </section>
+                    <section className="panel map-panel">
+                      <div className="panel-heading">
+                        <h2>Vị trí và khuôn viên</h2>
+                        <Button
+                          size="small"
+                          disabled={!me.reading}
+                          onClick={() => setFocus(me.reading)}
+                          icon={<AimOutlined />}
+                        >
+                          Về vị trí tôi
+                        </Button>
+                      </div>
+                      <Map
+                        polygon={campus?.polygon ?? []}
+                        people={[me]}
+                        focus={focus ?? me.reading}
+                      />
+                      <div className="map-legend">
+                        Vòng tròn bao quanh vị trí biểu thị sai số GPS.
+                      </div>
+                    </section>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          <footer>
+            Campus Guard <span>Phân hiệu 1 · Thiếu sinh quân miền Trung</span>
+            <span>Thời gian hiển thị: Việt Nam (UTC+7)</span>
+          </footer>
+        </main>
+      </div>
+      <Modal
+        open={createOpen}
+        title="Tạo tài khoản người dùng"
+        okText="Tạo tài khoản"
+        cancelText="Hủy"
+        confirmLoading={busy}
+        onCancel={() => setCreateOpen(false)}
+        onOk={async () => {
+          try {
+            const values = await userForm.validateFields();
+            if (
+              await act(() => api("users", "POST", values), "Đã tạo tài khoản")
+            ) {
+              setCreateOpen(false);
+              userForm.resetFields();
+            }
+          } catch {
+            /* Field validation. */
+          }
+        }}
+      >
+        <p className="muted">
+          Người dùng đăng nhập bằng email và mật khẩu bạn cung cấp.
+        </p>
+        <Form form={userForm} layout="vertical">
+          <Form.Item
+            name="name"
+            label="Họ tên"
+            rules={[{ required: true, min: 2 }]}
+          >
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="email"
+            label="Email"
+            rules={[{ required: true, type: "email" }]}
+          >
+            <Input autoComplete="off" />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="Mật khẩu"
+            rules={[
+              {
+                required: true,
+                min: 12,
+                message: "Mật khẩu ít nhất 12 ký tự.",
+              },
+            ]}
+          >
+            <Input.Password autoComplete="new-password" />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Modal
+        open={!!report}
+        title="Báo cáo cho quản trị viên"
+        okText="Gửi báo cáo"
+        cancelText="Hủy"
+        confirmLoading={busy}
+        onCancel={() => setReport(null)}
+        onOk={async () => {
+          if (!report) return;
+          if (
+            await act(
+              () =>
+                api(`alerts/${report.id}/report`, "POST", {
+                  report: reportText,
+                }),
+              "Đã gửi báo cáo",
+            )
+          )
+            setReport(null);
+        }}
+      >
+        <p>
+          Giải thích tình huống liên quan đến cảnh báo lúc{" "}
+          {time(report?.created_at ?? null)}.
+        </p>
+        <Input.TextArea
+          aria-label="Nội dung báo cáo"
+          value={reportText}
+          onChange={(e) => setReportText(e.target.value)}
+          rows={5}
+          maxLength={2000}
+          showCount
+          placeholder="Nhập ít nhất 5 ký tự…"
+        />
+      </Modal>
+    </div>
+  );
+}
