@@ -1,19 +1,25 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, dirname, basename, resolve } from "node:path";
 import { spawn } from "node:child_process";
-const dir = mkdtempSync(join(tmpdir(), "campus-api-"));
-process.env.DATABASE_PATH = join(dir, "db.sqlite");
+import { startTestDatabase } from "./test-database";
+const fixture = await startTestDatabase();
+process.env.APP_ORIGIN = "http://localhost:3107";
 const { createUser } = await import("../src/lib/auth");
-const { db } = await import("../src/lib/db");
+const { collections, closeDatabase } = await import("../src/lib/db");
+const c = await collections();
 const password = randomBytes(24).toString("hex");
-createUser("QA Admin", "admin@example.invalid", password, "admin");
+await createUser("QA Admin", "admin@example.invalid", password, "admin");
 const origin = "http://localhost:3107";
 const child = spawn(
   process.execPath,
-  ["node_modules/next/dist/bin/next", "start", "-p", "3107"],
+  [
+    "node_modules/next/dist/bin/next",
+    "start",
+    "--hostname",
+    "0.0.0.0",
+    "-p",
+    "3107",
+  ],
   { env: process.env, stdio: ["ignore", "pipe", "pipe"] },
 );
 let logs = "";
@@ -186,12 +192,16 @@ try {
   assert.equal(state.users.length, 2);
   const memberId = own.me.id;
   const staleTime = Date.now() - 10 * 60000;
-  db.prepare("UPDATE users SET reading=? WHERE id=?").run(
-    JSON.stringify({ lat: 14, lng: 108, accuracy: 5, capturedAt: staleTime }),
-    memberId,
+  await c.users.updateOne(
+    { id: memberId },
+    {
+      $set: {
+        reading: { lat: 14, lng: 108, accuracy: 5, capturedAt: staleTime },
+      },
+    },
   );
   const { sweep } = await import("../src/lib/store");
-  sweep();
+  await sweep();
   const alertState = await (
     await request("state", "GET", undefined, memberCookie)
   ).json();
@@ -264,8 +274,6 @@ try {
     if (child.exitCode !== null) r();
     else child.once("exit", () => r());
   });
-  db.close();
-  assert.equal(dirname(dir), resolve(tmpdir()));
-  assert.ok(basename(dir).startsWith("campus-api-"));
-  rmSync(dir, { recursive: true, force: true });
+  await closeDatabase();
+  await fixture.stop();
 }

@@ -1,13 +1,14 @@
 # Campus Guard
 
-Next.js App Router + Ant Design + Leaflet + SQLite. Tên trường mặc định: **Phân hiệu 1 Trường Thiếu sinh quân miền Trung, phường Thống Nhất, Pleiku, Gia Lai**. Không gán tọa độ hay ranh giới trường chưa được xác minh. Bản đồ khởi tạo ở khu vực Pleiku; admin tìm khuôn viên và vẽ theo hàng rào thực tế.
+Next.js App Router + Ant Design + Leaflet + MongoDB Atlas. Tên trường mặc định: **Phân hiệu 1 Trường Thiếu sinh quân miền Trung, phường Thống Nhất, Pleiku, Gia Lai**. Không gán tọa độ hay ranh giới trường chưa được xác minh. Bản đồ khởi tạo ở khu vực Pleiku; admin tìm khuôn viên và vẽ theo hàng rào thực tế.
 
 ## Chạy trên máy chủ
 
-Yêu cầu Node.js >=22.13 (khuyến nghị Node 24 LTS), ổ đĩa ghi được. Từ thư mục này:
+Yêu cầu Node.js >=22.13 (khuyến nghị Node 24 LTS), MongoDB replica set/Atlas và quyền truy cập mạng tới database. Sao chép `.env.example` thành `.env.local`, điền `MONGODB_URI`, `MONGODB_DB` và `APP_ORIGIN`. Không đưa chuỗi kết nối vào mã client, biến `NEXT_PUBLIC_*`, Git hoặc log. File `.env.local` đã được Git bỏ qua. Từ thư mục này:
 
 ```powershell
 npm install
+npm run db:check
 npm run admin
 npm run dev
 ```
@@ -18,7 +19,7 @@ Lệnh `admin` hỏi email, tên và mật khẩu (ít nhất 12 ký tự, khôn
 npm run monitor
 ```
 
-**Monitor phải chạy liên tục**, kể cả khi không ai mở trình duyệt. Nó kiểm tra quá hạn mỗi 30 giây và ghi cảnh báo vào SQLite. API dashboard cũng kiểm tra bù khi được đọc. Cảnh báo hiện trên trang admin; nút Bật thông báo sử dụng Notification API khi trang vẫn mở. **Chưa triển khai Web Push / SMS / email khi admin đóng trang.**
+**Monitor phải chạy liên tục**, kể cả khi không ai mở trình duyệt. Nó kiểm tra quá hạn mỗi 30 giây và ghi cảnh báo vào MongoDB. API dashboard cũng kiểm tra bù khi được đọc. Cảnh báo hiện trên trang admin; nút Bật thông báo sử dụng Notification API khi trang vẫn mở. **Chưa triển khai Web Push / SMS / email khi admin đóng trang.**
 
 ## Luồng sử dụng
 
@@ -42,13 +43,17 @@ npm run monitor
 npm run test
 npm run build
 npm run start
-# Một tiến trình riêng, cùng DATABASE_PATH:
+# Một tiến trình riêng, cùng MONGODB_URI/MONGODB_DB:
 npm run monitor
 ```
 
-Dùng VPS/container Node với ổ đĩa bền vững; reverse proxy HTTPS. Điện thoại phải vào URL HTTPS để cấp quyền vị trí. Production cookie có cờ Secure, HttpOnly, SameSite=Strict. Đặt hai tiến trình app và monitor dưới trình quản lý tiến trình để tự khởi động lại. Có thể dùng một app process và một monitor process chung một DB SQLite (WAL, busy timeout). Không đặt SQLite trên network filesystem, không chạy nhiều container với DB cục bộ riêng. Không dùng Next.js static export hoặc hosting không có persistent filesystem. Sao lưu SQLite bằng SQLite backup API hoặc dừng cả hai tiến trình trước khi sao chép file DB.
+Dùng VPS/container Node và reverse proxy HTTPS. Điện thoại phải vào URL HTTPS để cấp quyền vị trí. Production cookie có cờ Secure, HttpOnly, SameSite=Strict. Đặt cả app và monitor dưới trình quản lý tiến trình để tự khởi động lại. Cả app, admin CLI và monitor đều tự nạp `.env.local` và dùng cùng `MONGODB_URI`/`MONGODB_DB`.
 
-`DATABASE_PATH` mặc định là `./data/campus.sqlite`; có thể đặt biến môi trường thành đường dẫn tuyệt đối, **cùng giá trị cho cả app, admin CLI và monitor**. `.env.example` có mô tả; script CLI đọc biến môi trường của tiến trình, không tự nạp `.env.local`.
+`MONGODB_DB` mặc định là `campus_guard`. Kết nối dùng pool, index email duy nhất, index chống trùng cảnh báo đang hoạt động và TTL index cho phiên đăng nhập/giới hạn thử sai. Cập nhật vị trí và cảnh báo dùng multi-document transaction nên **cần MongoDB replica set hoặc Atlas**, không dùng MongoDB standalone. Không cần persistent filesystem cho database ở máy chạy Next.js. Các file SQLite cũ trong `data/` được giữ nguyên, không bị xóa và không còn được ứng dụng sử dụng.
+
+`APP_ORIGIN` phải bằng origin thực tế của website, ví dụ `https://gps.example.edu.vn` (không có đường dẫn hoặc dấu `/` cuối). Khi thử trong LAN, có thể khai báo danh sách origin tin cậy cách nhau bởi dấu phẩy; HTTP qua IP LAN vẫn không đủ điều kiện dùng GPS. Không lấy `Host`/`X-Forwarded-Host` bất kỳ làm allowlist. Cấu hình này sửa lỗi đăng nhập 403 khi Next lắng nghe trên `0.0.0.0`.
+
+`npm run db:check` kiểm tra kết nối bằng ping, không tạo tài khoản hay dữ liệu mẫu. Nếu thất bại, kiểm tra Atlas Network Access, DNS và quyền database user; không cần mở truy cập cho toàn bộ Internet. Thông tin kết nối phải nằm trong môi trường của máy chủ khi deploy. Các lỗi kết nối trả thông báo chung, không đưa URI hoặc chi tiết driver xuống trình duyệt.
 
 Web không bảo đảm định vị nền Android/iOS. Cần ứng dụng native/hybrid có module định vị nền và quyền phù hợp để triển khai yêu cầu khóa màn hình/chuyển ứng dụng. Backend và thuật toán hiện tại có thể tái sử dụng, nhưng chưa có ứng dụng native trong dự án này. Chưa triển khai lịch ca bắt buộc theo dõi, cấp phép ra ngoài, khôi phục mật khẩu, audit log hay xác minh GPS chống giả mạo.
 
@@ -56,4 +61,4 @@ Bản đồ dùng tile OpenStreetMap (cần mạng và tuân thủ chính sách 
 
 ## Kiểm tra
 
-`npm test`: kiểm tra đa giác lõm, hình tự cắt, sai số sát ranh giới, chuỗi xác nhận; kiểm tra DB thật cho mất cập nhật, khử cảnh báo trùng, khôi phục vị trí và mật khẩu. `npm run test:api` (sau build) tự chạy server tạm, kiểm tra cookie, phân quyền, tạo tài khoản, CSRF, lưu ranh giới và gửi vị trí; không dùng hoặc sửa DB thật.
+`npm test`: kiểm tra hình học, Origin, mật khẩu và workflow MongoDB bằng replica set tạm (`mongodb-memory-server`), bao gồm chống trùng cảnh báo, transaction và phục hồi vị trí. Lần đầu có thể tải MongoDB binary từ máy chủ phân phối chính thức. **Các kiểm thử ghi dữ liệu vào MongoDB tạm, không dùng Atlas được cấu hình trong `.env.local`.** `npm run test:api` (sau build) tự chạy server tạm với `--hostname 0.0.0.0` để kiểm tra cookie, phân quyền, khóa tài khoản, CSRF, ranh giới, GPS và báo cáo.

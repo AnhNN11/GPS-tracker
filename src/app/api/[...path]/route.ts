@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { db, transaction } from "@/lib/db";
+import { collections } from "@/lib/db";
+import { MongoError, MongoServerError } from "mongodb";
+import { validOrigin } from "@/lib/origin";
 import {
   requireUser,
   sessionUser,
@@ -13,7 +15,13 @@ import {
   loginAllowed,
   type UserRow,
 } from "@/lib/auth";
-import { dashboard, saveCampus, acceptReading, setTracking } from "@/lib/store";
+import {
+  dashboard,
+  saveCampus,
+  acceptReading,
+  setTracking,
+  disableUser,
+} from "@/lib/store";
 import { validPolygon } from "@/lib/geo";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,10 +49,7 @@ async function handler(
     const { path } = await ctx.params,
       route = path.join("/"),
       method = req.method;
-    if (
-      method !== "GET" &&
-      req.headers.get("origin") !== new URL(req.url).origin
-    )
+    if (method !== "GET" && !validOrigin(req.headers.get("origin")))
       return NextResponse.json(
         { error: "Nguồn yêu cầu không hợp lệ." },
         { status: 403 },
@@ -55,32 +60,32 @@ async function handler(
       result = { user: user ? publicUser(user) : null };
     } else if (route === "auth/login" && method === "POST") {
       const input = credentials.parse(await body(req));
-      if (!loginAllowed(input.email))
+      if (!(await loginAllowed(input.email)))
         return NextResponse.json(
           { error: "Thử sai quá nhiều. Vui lòng chờ 15 phút." },
           { status: 429 },
         );
-      const user = db
-        .prepare("SELECT * FROM users WHERE email=?")
-        .get(input.email) as UserRow | undefined;
+      const user = await (
+        await collections()
+      ).users.findOne({ email: input.email });
       if (
         !user ||
         !user.enabled ||
         !verifyPassword(input.password, user.password)
       ) {
-        failedLogin(input.email);
+        await failedLogin(input.email);
         return NextResponse.json(
           { error: "Email hoặc mật khẩu không đúng." },
           { status: 401 },
         );
       }
-      db.prepare("DELETE FROM login_limits WHERE key=?").run(input.email);
+      await (await collections()).limits.deleteOne({ key: input.email });
       await startSession(user.id);
       result = { user: publicUser(user) };
     } else if (route === "auth/logout" && method === "POST") {
       await endSession();
     } else if (route === "state" && method === "GET") {
-      result = dashboard(await requireUser());
+      result = await dashboard(await requireUser());
     } else if (route === "users" && method === "POST") {
       await requireUser(true);
       const input = credentials
@@ -89,26 +94,18 @@ async function handler(
           password: z.string().min(12).max(128),
         })
         .parse(await body(req));
-      if (db.prepare("SELECT id FROM users WHERE email=?").get(input.email))
+      if (await (await collections()).users.findOne({ email: input.email }))
         throw new Error("Email đã được sử dụng.");
-      result = { id: createUser(input.name, input.email, input.password) };
+      result = {
+        id: await createUser(input.name, input.email, input.password),
+      };
     } else if (path[0] === "users" && path.length === 2 && method === "PATCH") {
       const admin = await requireUser(true),
         input = z.object({ enabled: z.boolean() }).parse(await body(req));
-      const target = db
-        .prepare("SELECT * FROM users WHERE id=?")
-        .get(path[1]) as UserRow | undefined;
+      const target = await (await collections()).users.findOne({ id: path[1] });
       if (!target || target.role === "admin" || target.id === admin.id)
         throw new Error("Chỉ có thể thay đổi tài khoản người dùng.");
-      transaction(() => {
-        db.prepare("UPDATE users SET enabled=? WHERE id=?").run(
-          input.enabled ? 1 : 0,
-          target.id,
-        );
-        if (!input.enabled)
-          db.prepare("DELETE FROM sessions WHERE user_id=?").run(target.id);
-      });
-      if (!input.enabled) setTracking(target.id, false);
+      await disableUser(target.id, input.enabled);
     } else if (route === "campus" && method === "PUT") {
       await requireUser(true);
       const input = z
@@ -128,7 +125,7 @@ async function handler(
         throw new Error(
           "Ranh giới phải có ít nhất 3 đỉnh, không tự cắt, diện tích ≥100 m² và kích thước ≤10 km.",
         );
-      saveCampus(input);
+      await saveCampus(input);
     } else if (route === "tracking" && method === "POST") {
       const user = await requireUser(),
         input = z
@@ -136,7 +133,7 @@ async function handler(
           .parse(await body(req));
       if (input.enabled && !input.consent)
         throw new Error("Cần đồng ý chia sẻ vị trí.");
-      setTracking(user.id, input.enabled);
+      await setTracking(user.id, input.enabled);
     } else if (route === "location" && method === "POST") {
       const user = await requireUser();
       const input = point
@@ -145,28 +142,29 @@ async function handler(
           capturedAt: z.number().int().positive(),
         })
         .parse(await body(req));
-      result = { status: acceptReading(user.id, input) };
+      result = { status: await acceptReading(user.id, input) };
     } else if (path[0] === "alerts" && path.length === 3 && method === "POST") {
       const user = await requireUser(),
-        alert = db
-          .prepare("SELECT user_id FROM alerts WHERE id=?")
-          .get(path[1]) as { user_id: string } | undefined;
+        alert = await (await collections()).alerts.findOne({ id: path[1] });
       if (!alert) throw new Error("Không tìm thấy cảnh báo.");
       if (path[2] === "report") {
         if (alert.user_id !== user.id) throw new Error("FORBIDDEN");
         const input = z
           .object({ report: z.string().trim().min(5).max(2000) })
           .parse(await body(req));
-        db.prepare("UPDATE alerts SET report=?,reported_at=? WHERE id=?").run(
-          input.report,
-          Date.now(),
-          path[1],
+        await (
+          await collections()
+        ).alerts.updateOne(
+          { id: path[1] },
+          { $set: { report: input.report, reported_at: Date.now() } },
         );
       } else if (path[2] === "ack") {
         if (user.role !== "admin") throw new Error("FORBIDDEN");
-        db.prepare("UPDATE alerts SET acknowledged_at=? WHERE id=?").run(
-          Date.now(),
-          path[1],
+        await (
+          await collections()
+        ).alerts.updateOne(
+          { id: path[1] },
+          { $set: { acknowledged_at: Date.now() } },
         );
       } else
         return NextResponse.json(
@@ -182,6 +180,19 @@ async function handler(
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
+    if (error instanceof MongoServerError && error.code === 11000)
+      return NextResponse.json(
+        { error: "Dữ liệu trùng. Hãy kiểm tra email và thử lại." },
+        { status: 409 },
+      );
+    if (
+      error instanceof MongoError ||
+      (error instanceof Error && error.message === "DB_UNAVAILABLE")
+    )
+      return NextResponse.json(
+        { error: "Không kết nối được cơ sở dữ liệu. Vui lòng thử lại sau." },
+        { status: 503 },
+      );
     const message =
       error instanceof Error ? error.message : "Yêu cầu không hợp lệ.";
     const status =

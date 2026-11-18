@@ -1,10 +1,15 @@
 import { sweep } from "../src/lib/store";
 // Dedicated process: alerts continue to be created when all browsers are closed.
-function tick() {
+let running = false;
+async function tick() {
+  if (running) return;
+  running = true;
   try {
-    sweep();
+    await sweep();
   } catch (e) {
-    console.error("Monitor error:", e);
+    console.error("Monitor: cơ sở dữ liệu chưa sẵn sàng.");
+  } finally {
+    running = false;
   }
 }
 tick();

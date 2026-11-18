@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { createUser } from "../src/lib/auth";
-import { db } from "../src/lib/db";
+import { collections, closeDatabase } from "../src/lib/db";
 const prompt = createInterface({
   input: process.stdin,
   output: process.stdout,
@@ -35,7 +35,8 @@ if (
   password.length > 128
 )
   throw new Error("Thông tin không hợp lệ.");
-if (db.prepare("SELECT id FROM users WHERE email=?").get(email))
+if (await (await collections()).users.findOne({ email }))
   throw new Error("Email đã tồn tại.");
-createUser(name, email, password, "admin");
+await createUser(name, email, password, "admin");
+await closeDatabase();
 console.log("Đã tạo quản trị viên.");

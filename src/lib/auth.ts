@@ -6,48 +6,41 @@ import {
   randomUUID,
 } from "node:crypto";
 import { cookies } from "next/headers";
-import { db } from "./db";
-export type UserRow = {
-  id: string;
-  name: string;
-  email: string;
-  role: "admin" | "member";
-  password: string;
-  enabled: number;
-  tracking: number;
-  tracking_started: number | null;
-  reading: string | null;
-  status: string;
-  candidate: string | null;
-  created_at: number;
-};
+import { collections, transaction } from "./db";
+import type { UserRow } from "./models";
+export type { UserRow } from "./models";
 export function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
-  return `${salt}:${scryptSync(password, salt, 64).toString("hex")}`;
+  return salt + ":" + scryptSync(password, salt, 64).toString("hex");
 }
 export function verifyPassword(password: string, hash: string) {
   const [salt, key] = hash.split(":");
-  const expected = Buffer.from(key, "hex");
-  const actual = scryptSync(password, salt, 64);
+  const expected = Buffer.from(key, "hex"),
+    actual = scryptSync(password, salt, 64);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
-export function createUser(
+export async function createUser(
   name: string,
   email: string,
   password: string,
-  role = "member",
+  role: UserRow["role"] = "member",
 ) {
-  const id = randomUUID();
-  db.prepare(
-    "INSERT INTO users(id,name,email,password,role,created_at) VALUES(?,?,?,?,?,?)",
-  ).run(
+  const id = randomUUID(),
+    c = await collections();
+  await c.users.insertOne({
     id,
     name,
-    email.toLowerCase(),
-    hashPassword(password),
+    email: email.trim().toLowerCase(),
+    password: hashPassword(password),
     role,
-    Date.now(),
-  );
+    enabled: 1,
+    tracking: 0,
+    tracking_started: null,
+    reading: null,
+    status: "unknown",
+    candidate: null,
+    created_at: Date.now(),
+  });
   return id;
 }
 const digest = (token: string) =>
@@ -55,11 +48,14 @@ const digest = (token: string) =>
 export async function sessionUser() {
   const token = (await cookies()).get("campus_session")?.value;
   if (!token) return null;
-  return db
-    .prepare(
-      "SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id WHERE token=? AND expires>? AND enabled=1",
-    )
-    .get(digest(token), Date.now()) as UserRow | undefined;
+  const c = await collections(),
+    session = await c.sessions.findOne({
+      token: digest(token),
+      expires: { $gt: Date.now() },
+    });
+  return session
+    ? await c.users.findOne({ id: session.user_id, enabled: 1 })
+    : null;
 }
 export async function requireUser(admin = false) {
   const user = await sessionUser();
@@ -70,12 +66,19 @@ export async function requireUser(admin = false) {
 export async function startSession(id: string) {
   const token = randomBytes(32).toString("hex"),
     expires = Date.now() + 12 * 3600000;
-  db.prepare("DELETE FROM sessions WHERE expires<?").run(Date.now());
-  db.prepare("INSERT INTO sessions VALUES(?,?,?)").run(
-    digest(token),
-    id,
-    expires,
-  );
+  await transaction(async (c, session) => {
+    const user = await c.users.findOne({ id, enabled: 1 }, { session });
+    if (!user) throw new Error("UNAUTHORIZED");
+    await c.sessions.insertOne(
+      {
+        token: digest(token),
+        user_id: id,
+        expires,
+        expiresAt: new Date(expires),
+      },
+      { session },
+    );
+  });
   (await cookies()).set("campus_session", token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -88,7 +91,7 @@ export async function endSession() {
   const jar = await cookies(),
     token = jar.get("campus_session")?.value;
   if (token)
-    db.prepare("DELETE FROM sessions WHERE token=?").run(digest(token));
+    await (await collections()).sessions.deleteOne({ token: digest(token) });
   jar.delete("campus_session");
 }
 export function publicUser(u: UserRow) {
@@ -101,17 +104,33 @@ export function publicUser(u: UserRow) {
     tracking: !!u.tracking,
     status: u.status,
     trackingStarted: u.tracking_started,
-    reading: u.reading ? JSON.parse(u.reading) : null,
+    reading: u.reading,
   };
 }
-export function loginAllowed(email: string) {
-  const row = db
-    .prepare("SELECT * FROM login_limits WHERE key=?")
-    .get(email) as { attempts: number; resets: number } | undefined;
+export async function loginAllowed(email: string) {
+  const row = await (await collections()).limits.findOne({ key: email });
   return !row || row.resets < Date.now() || row.attempts < 5;
 }
-export function failedLogin(email: string) {
-  db.prepare(
-    "INSERT INTO login_limits VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET attempts=CASE WHEN resets<? THEN 1 ELSE attempts+1 END,resets=CASE WHEN resets<? THEN excluded.resets ELSE resets END",
-  ).run(email, Date.now() + 15 * 60000, Date.now(), Date.now());
+export async function failedLogin(email: string) {
+  const now = Date.now();
+  await (
+    await collections()
+  ).limits.updateOne(
+    { key: email },
+    [
+      {
+        $set: {
+          key: email,
+          attempts: {
+            $cond: [{ $gt: ["$resets", now] }, { $add: ["$attempts", 1] }, 1],
+          },
+          resets: {
+            $cond: [{ $gt: ["$resets", now] }, "$resets", now + 900000],
+          },
+          expiresAt: new Date(now + 900000),
+        },
+      },
+    ],
+    { upsert: true },
+  );
 }

@@ -1,153 +1,235 @@
 import { randomUUID } from "node:crypto";
-import { db, transaction } from "./db";
+import type { ClientSession } from "mongodb";
+import { collections, transaction } from "./db";
 import { publicUser, type UserRow } from "./auth";
 import {
   advanceOutside,
   classify,
   defaultPolicy,
-  type Point,
-  type Policy,
   type Reading,
   type Candidate,
 } from "./geo";
-export type Campus = {
-  name: string;
-  address: string;
-  polygon: Point[];
-  policy: Policy;
-};
+import type { Campus, AlertRow } from "./models";
+export type { Campus } from "./models";
+type Collections = Awaited<ReturnType<typeof collections>>;
 export const initialCampus: Campus = {
   name: "Phân hiệu 1 Trường Thiếu sinh quân miền Trung",
   address: "Phường Thống Nhất, Pleiku, Gia Lai",
   polygon: [],
   policy: defaultPolicy,
 };
-export function campus(): Campus {
-  const row = db.prepare("SELECT value FROM settings WHERE id=1").get() as
-    { value: string } | undefined;
-  return row ? JSON.parse(row.value) : initialCampus;
+export async function campus(
+  c?: Collections,
+  session?: ClientSession,
+): Promise<Campus> {
+  const store = c ?? (await collections());
+  return (
+    (await store.settings.findOne({ key: "campus" }, { session }))?.value ??
+    initialCampus
+  );
 }
-export function saveCampus(value: Campus) {
-  transaction(() => {
-    db.prepare(
-      "INSERT INTO settings VALUES(1,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
-    ).run(JSON.stringify(value));
-    db.prepare("UPDATE users SET status='unknown',candidate=NULL").run();
-    db.prepare(
-      "UPDATE alerts SET resolved_at=? WHERE resolved_at IS NULL AND type=?",
-    ).run(Date.now(), "outside");
+export async function saveCampus(value: Campus) {
+  await transaction(async (c, session) => {
+    await c.settings.updateOne(
+      { key: "campus" },
+      { $set: { value } },
+      { upsert: true, session },
+    );
+    await c.users.updateMany(
+      {},
+      { $set: { status: "unknown", candidate: null } },
+      { session },
+    );
+    await c.alerts.updateMany(
+      { active: true, type: "outside" },
+      { $set: { resolved_at: Date.now(), active: false } },
+      { session },
+    );
   });
 }
-function openAlert(userId: string, type: string, time = Date.now()) {
-  db.prepare(
-    "INSERT OR IGNORE INTO alerts(id,user_id,type,created_at) VALUES(?,?,?,?)",
-  ).run(randomUUID(), userId, type, time);
+async function openAlert(
+  c: Collections,
+  session: ClientSession,
+  userId: string,
+  type: AlertRow["type"],
+  time = Date.now(),
+) {
+  await c.alerts.updateOne(
+    { user_id: userId, type, active: true },
+    {
+      $setOnInsert: {
+        id: randomUUID(),
+        user_id: userId,
+        type,
+        active: true,
+        created_at: time,
+        resolved_at: null,
+        acknowledged_at: null,
+        report: null,
+        reported_at: null,
+      },
+    },
+    { upsert: true, session },
+  );
 }
-function resolveAlert(userId: string, type: string) {
-  db.prepare(
-    "UPDATE alerts SET resolved_at=? WHERE user_id=? AND type=? AND resolved_at IS NULL",
-  ).run(Date.now(), userId, type);
+async function resolveAlert(
+  c: Collections,
+  session: ClientSession,
+  userId: string,
+  type: AlertRow["type"],
+) {
+  await c.alerts.updateMany(
+    { user_id: userId, type, active: true },
+    { $set: { resolved_at: Date.now(), active: false } },
+    { session },
+  );
 }
-export function acceptReading(
+export async function acceptReading(
   userId: string,
   reading: Reading,
   now = Date.now(),
 ) {
-  return transaction(() => {
-    const user = db
-      .prepare("SELECT * FROM users WHERE id=?")
-      .get(userId) as UserRow;
-    if (!user.tracking) throw new Error("Bạn cần bật chia sẻ vị trí trước.");
-    const previous = user.reading
-      ? (JSON.parse(user.reading) as Reading)
-      : null;
+  return transaction(async (c, session) => {
+    const user = await c.users.findOne({ id: userId, enabled: 1 }, { session });
+    if (!user?.tracking) throw new Error("Bạn cần bật chia sẻ vị trí trước.");
     if (
       reading.capturedAt < now - 90000 ||
       reading.capturedAt > now + 10000 ||
-      (previous && reading.capturedAt <= previous.capturedAt)
+      (user.reading && reading.capturedAt <= user.reading.capturedAt)
     )
       throw new Error(
         "Mẫu vị trí đã cũ hoặc trùng thời điểm. Hãy lấy vị trí mới.",
       );
-    const config = campus(),
+    const config = await campus(c, session),
       status = classify(reading, config.polygon, config.policy);
     let candidate: Candidate | null = null,
       displayed: string = status;
     if (status === "outside") {
       const next = advanceOutside(
-        user.candidate ? JSON.parse(user.candidate) : null,
+        user.candidate,
         reading.capturedAt,
         config.policy,
       );
       candidate = next.candidate;
       displayed = next.confirmed ? "outside" : "pending";
-      if (next.confirmed) openAlert(user.id, "outside", now);
+      if (next.confirmed) await openAlert(c, session, user.id, "outside", now);
     }
-    if (status === "inside") resolveAlert(user.id, "outside");
-    resolveAlert(user.id, "stale");
-    db.prepare(
-      "UPDATE users SET reading=?,status=?,candidate=? WHERE id=?",
-    ).run(
-      JSON.stringify(reading),
-      displayed,
-      candidate ? JSON.stringify(candidate) : null,
-      user.id,
+    if (status === "inside") await resolveAlert(c, session, user.id, "outside");
+    await resolveAlert(c, session, user.id, "stale");
+    await c.users.updateOne(
+      { id: user.id },
+      { $set: { reading, status: displayed, candidate } },
+      { session },
     );
     return displayed;
   });
 }
-export function setTracking(userId: string, enabled: boolean) {
-  transaction(() => {
-    db.prepare(
-      "UPDATE users SET tracking=?,tracking_started=?,reading=NULL,candidate=NULL,status='unknown' WHERE id=?",
-    ).run(enabled ? 1 : 0, enabled ? Date.now() : null, userId);
+export async function setTracking(userId: string, enabled: boolean) {
+  await transaction(async (c, session) => {
+    await c.users.updateOne(
+      { id: userId },
+      {
+        $set: {
+          tracking: enabled ? 1 : 0,
+          tracking_started: enabled ? Date.now() : null,
+          reading: null,
+          candidate: null,
+          status: "unknown",
+        },
+      },
+      { session },
+    );
     if (!enabled) {
-      resolveAlert(userId, "stale");
-      resolveAlert(userId, "outside");
+      await resolveAlert(c, session, userId, "stale");
+      await resolveAlert(c, session, userId, "outside");
     }
   });
 }
-export function sweep(now = Date.now()) {
-  transaction(() => {
-    const policy = campus().policy;
-    const users = db
-      .prepare("SELECT * FROM users WHERE tracking=1 AND enabled=1")
-      .all() as UserRow[];
-    for (const user of users) {
-      const reading = user.reading
-        ? (JSON.parse(user.reading) as Reading)
-        : null;
+export async function disableUser(userId: string, enabled: boolean) {
+  await transaction(async (c, session) => {
+    await c.users.updateOne(
+      { id: userId },
+      {
+        $set: {
+          enabled: enabled ? 1 : 0,
+          ...(!enabled
+            ? {
+                tracking: 0,
+                tracking_started: null,
+                reading: null,
+                candidate: null,
+                status: "unknown",
+              }
+            : {}),
+        },
+      },
+      { session },
+    );
+    if (!enabled) {
+      await c.sessions.deleteMany({ user_id: userId }, { session });
+      await resolveAlert(c, session, userId, "stale");
+      await resolveAlert(c, session, userId, "outside");
+    }
+  });
+}
+export async function sweep(now = Date.now()) {
+  const c = await collections(),
+    cutoff = now - (await campus(c)).policy.staleMinutes * 60000;
+  const ids = await c.users
+    .find(
+      {
+        tracking: 1,
+        enabled: 1,
+        $or: [
+          { "reading.capturedAt": { $lt: cutoff } },
+          { reading: null, tracking_started: { $lt: cutoff } },
+        ],
+      },
+      { projection: { id: 1 } },
+    )
+    .toArray();
+  for (const { id } of ids)
+    await transaction(async (store, session) => {
+      const user = await store.users.findOne(
+        { id, tracking: 1, enabled: 1 },
+        { session },
+      );
+      if (!user) return;
+      const policy = (await campus(store, session)).policy;
       if (
-        now - (reading?.capturedAt ?? user.tracking_started ?? now) >
+        now - (user.reading?.capturedAt ?? user.tracking_started ?? now) >
         policy.staleMinutes * 60000
       ) {
-        openAlert(user.id, "stale", now);
-        db.prepare(
-          "UPDATE users SET status='stale',candidate=NULL WHERE id=?",
-        ).run(user.id);
+        await openAlert(store, session, id, "stale", now);
+        await store.users.updateOne(
+          { id },
+          { $set: { status: "stale", candidate: null } },
+          { session },
+        );
       }
-    }
-  });
+    });
 }
-export function dashboard(user: UserRow) {
-  sweep();
-  const admin = user.role === "admin";
-  const users = (
-    admin
-      ? db.prepare("SELECT * FROM users ORDER BY created_at DESC").all()
-      : db.prepare("SELECT * FROM users WHERE id=?").all(user.id)
-  ) as UserRow[];
-  const query =
-    "SELECT alerts.*,users.name AS user_name FROM alerts JOIN users ON users.id=alerts.user_id";
-  const alerts = admin
-    ? db.prepare(query + " ORDER BY created_at DESC LIMIT 200").all()
-    : db
-        .prepare(query + " WHERE user_id=? ORDER BY created_at DESC LIMIT 100")
-        .all(user.id);
+export async function dashboard(user: UserRow) {
+  await sweep();
+  const c = await collections(),
+    admin = user.role === "admin";
+  const users = await c.users
+    .find(admin ? {} : { id: user.id })
+    .sort({ created_at: -1 })
+    .toArray();
+  const alerts = await c.alerts
+    .find(admin ? {} : { user_id: user.id }, { projection: { _id: 0 } })
+    .sort({ created_at: -1 })
+    .limit(admin ? 200 : 100)
+    .toArray();
+  const names = new Map(users.map((u) => [u.id, u.name]));
   return {
-    campus: campus(),
+    campus: await campus(c),
     users: users.map(publicUser),
-    alerts,
+    alerts: alerts.map((a) => ({
+      ...a,
+      user_name: names.get(a.user_id) ?? "Người dùng",
+    })),
     me: publicUser(users.find((u) => u.id === user.id) ?? user),
     serverTime: Date.now(),
   };
