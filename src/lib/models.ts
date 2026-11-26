@@ -1,8 +1,9 @@
-import type { Point, Reading, Policy, Candidate } from "./geo";
+import type { Point, Reading, Policy, Candidate, CircleRegion } from "./geo";
 export type Campus = {
   name: string;
   address: string;
   polygon: Point[];
+  circle?: CircleRegion;
   policy: Policy;
   boundaryNote?: string;
 };
@@ -25,6 +26,8 @@ export type UserRow = {
 export type SampleClassification =
   "inside" | "outside" | "uncertain" | "unconfigured";
 export type LocationSample = Reading & {
+  deviceId?: string;
+  deviceLabel?: string;
   id: string;
   user_id: string;
   receivedAt: number;
@@ -40,8 +43,10 @@ export type ExcursionEnd =
   | "data_gap"
   | "sharing_stopped"
   | "account_disabled"
-  | "boundary_changed";
+  | "boundary_changed"
+  | "device_changed";
 export type Excursion = {
+  deviceId?: string;
   id: string;
   user_id: string;
   trackingSession: string;
@@ -90,4 +95,11 @@ export type PushDevice = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
   createdAt: number;
+};
+export type ClientToken = {
+  tokenHash: string;
+  user_id: string;
+  deviceId: string;
+  deviceLabel: string;
+  expiresAt: Date;
 };

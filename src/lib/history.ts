@@ -226,6 +226,8 @@ export function historyCsv(
       ? [
           "Người dùng",
           "Mã người dùng",
+          "Mã thiết bị",
+          "Tên thiết bị",
           "Thời điểm GPS (UTC+7)",
           "Thời điểm nhận (UTC+7)",
           "Vĩ độ",
@@ -240,6 +242,7 @@ export function historyCsv(
       : [
           "Người dùng",
           "Mã lượt",
+          "Mã thiết bị",
           "Mẫu ngoài đầu tiên (UTC+7)",
           "Xác nhận ngoài (UTC+7)",
           "Mẫu ngoài cuối (UTC+7)",
@@ -256,6 +259,8 @@ export function historyCsv(
         ? [
             r.user_name,
             r.user_id,
+            r.deviceId,
+            r.deviceLabel,
             localTime(r.capturedAt),
             localTime(r.receivedAt),
             r.lat,
@@ -270,6 +275,7 @@ export function historyCsv(
         : [
             r.user_name,
             r.id,
+            r.deviceId,
             localTime(r.startedAt),
             localTime(r.confirmedAt),
             localTime(r.lastOutsideAt),

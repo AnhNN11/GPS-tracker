@@ -3,6 +3,7 @@ import type { ClientSession } from "mongodb";
 import type { collections } from "./db";
 import type { Campus, ExcursionEnd, SampleClassification } from "./models";
 import { edgeDistance, type Reading, type Candidate } from "./geo";
+import type { DeviceContext } from "./device-context";
 type Collections = Awaited<ReturnType<typeof collections>>;
 export const boundaryId = (campus: Campus) =>
   createHash("sha256")
@@ -11,6 +12,7 @@ export const boundaryId = (campus: Campus) =>
         name: campus.name,
         address: campus.address,
         polygon: campus.polygon,
+        circle: campus.circle,
         policy: campus.policy,
         boundaryNote: campus.boundaryNote,
       }),
@@ -64,6 +66,7 @@ export async function recordHistory(
     candidate: Candidate | null;
     previous: Reading | null;
     receivedAt: number;
+    device?: DeviceContext;
   },
 ) {
   const {
@@ -78,11 +81,29 @@ export async function recordHistory(
     receivedAt,
   } = input;
   const campusVersion = await ensureBoundary(c, session, campus);
+  let existing = await c.excursions.findOne(
+    { user_id: userId, active: true },
+    { session },
+  );
+  if (existing && existing.campusVersion !== campusVersion) {
+    await closeExcursion(c, session, userId, "boundary_changed", receivedAt);
+    existing = null;
+  }
+  if (existing && existing.deviceId !== input.device?.deviceId) {
+    await closeExcursion(c, session, userId, "device_changed", receivedAt);
+    existing = null;
+  }
   if (previous && reading.capturedAt - previous.capturedAt > 130000)
     await closeExcursion(c, session, userId, "data_gap", receivedAt);
   await c.samples.insertOne(
     {
       ...reading,
+      ...(input.device
+        ? {
+            deviceId: input.device.deviceId,
+            deviceLabel: input.device.deviceLabel,
+          }
+        : {}),
       id: randomUUID(),
       user_id: userId,
       receivedAt,
@@ -90,7 +111,7 @@ export async function recordHistory(
       status,
       edgeDistanceMeters:
         campus.polygon.length >= 3
-          ? edgeDistance(reading, campus.polygon)
+          ? edgeDistance(reading, campus.polygon, campus.circle)
           : null,
       campusVersion,
       trackingSession,
@@ -100,10 +121,9 @@ export async function recordHistory(
   if (classification === "inside")
     await closeExcursion(c, session, userId, "returned", receivedAt, reading);
   if (classification === "outside") {
-    const existing = await c.excursions.findOne(
-      { user_id: userId, active: true },
-      { session },
-    );
+    // A gap may have closed the event above; do not extend a closed excursion.
+    if (previous && reading.capturedAt - previous.capturedAt > 130000)
+      existing = null;
     if (existing)
       await c.excursions.updateOne(
         { id: existing.id },
@@ -115,6 +135,7 @@ export async function recordHistory(
         {
           id: randomUUID(),
           user_id: userId,
+          ...(input.device ? { deviceId: input.device.deviceId } : {}),
           trackingSession,
           campusVersion,
           active: true,

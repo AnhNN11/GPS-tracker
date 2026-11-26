@@ -29,14 +29,22 @@ after(async () => {
 test("Concurrent first GPS uploads share one immutable default-boundary snapshot", async () => {
   const ids = await Promise.all(
     ["a", "b"].map((name) =>
-      createUser("Concurrent " + name, name + "@concurrent.invalid", "a-secure-password"),
+      createUser(
+        "Concurrent " + name,
+        name + "@concurrent.invalid",
+        "a-secure-password",
+      ),
     ),
   );
   for (const id of ids) await setTracking(id, true);
   const now = Date.now();
   await Promise.all(
     ids.map((id) =>
-      acceptReading(id, { lat: 14, lng: 108, accuracy: 5, capturedAt: now }, now),
+      acceptReading(
+        id,
+        { lat: 14, lng: 108, accuracy: 5, capturedAt: now },
+        now,
+      ),
     ),
   );
   assert.equal(await c.samples.countDocuments({ user_id: { $in: ids } }), 2);
@@ -44,7 +52,7 @@ test("Concurrent first GPS uploads share one immutable default-boundary snapshot
   for (const id of ids) await setTracking(id, false);
 });
 test("Every GPS sample survives stopping and includes the original boundary version", async () => {
-  await saveCampus({ ...initialCampus, polygon });
+  await saveCampus({ ...initialCampus, circle: undefined, polygon });
   const id = await createUser(
     "History member",
     "history@example.invalid",
@@ -80,6 +88,7 @@ test("Every GPS sample survives stopping and includes the original boundary vers
   assert.ok((await c.users.findOne({ id }))?.reading);
   await saveCampus({
     ...initialCampus,
+    circle: undefined,
     polygon: polygon.map((p) => ({ ...p, lng: p.lng + 0.01 })),
   });
   assert.equal(
@@ -112,7 +121,7 @@ test("Every GPS sample survives stopping and includes the original boundary vers
   );
 });
 test("A single outside sample is saved even before an excursion is confirmed", async () => {
-  await saveCampus({ ...initialCampus, polygon });
+  await saveCampus({ ...initialCampus, circle: undefined, polygon });
   const id = await createUser(
     "Single sample",
     "single@example.invalid",
@@ -135,7 +144,7 @@ test("A single outside sample is saved even before an excursion is confirmed", a
   assert.equal(await c.excursions.countDocuments({ user_id: id }), 0);
 });
 test("Missing data and stopping sharing never fabricate a return to campus", async () => {
-  await saveCampus({ ...initialCampus, polygon });
+  await saveCampus({ ...initialCampus, circle: undefined, polygon });
   const id = await createUser(
     "Gap member",
     "gap@example.invalid",
@@ -165,6 +174,192 @@ test("Missing data and stopping sharing never fabricate a return to campus", asy
   assert.equal(stopped?.returnedAt, null);
   assert.equal(await c.samples.countDocuments({ user_id: id }), 4);
 });
+test("Changing radius preserves old circle history and resets confirmation; saving unchanged settings preserves open events", async () => {
+  const { circlePolygon, pointAtDistance } = await import("../src/lib/geo");
+  const { schoolCenter } = await import("../src/lib/campus-preset");
+  const circle = { center: schoolCenter, radiusMeters: 500 };
+  const original = { ...initialCampus, circle, polygon: circlePolygon(circle) };
+  await saveCampus(original);
+  const id = await createUser(
+    "Circle member",
+    "circle@example.invalid",
+    "a-secure-password",
+  );
+  await setTracking(id, true);
+  const now = Date.now(),
+    point = pointAtDistance(schoolCenter, 90, 700);
+  assert.equal(
+    await acceptReading(id, { ...point, accuracy: 10, capturedAt: now }, now),
+    "pending",
+  );
+  assert.equal(
+    await acceptReading(
+      id,
+      { ...point, accuracy: 10, capturedAt: now + 60000 },
+      now + 60000,
+    ),
+    "outside",
+  );
+  const event = await c.excursions.findOne({ user_id: id, active: true });
+  assert.ok(event);
+  await saveCampus(original);
+  assert.equal((await c.excursions.findOne({ id: event.id }))?.active, true);
+  const larger = { ...circle, radiusMeters: 1000 };
+  await saveCampus({
+    ...original,
+    circle: larger,
+    polygon: circlePolygon(larger),
+  });
+  const closed = await c.excursions.findOne({ id: event.id });
+  assert.equal(closed?.endReason, "boundary_changed");
+  assert.equal(closed?.returnedAt, null);
+  assert.equal(
+    (await c.boundaryVersions.findOne({ id: event.campusVersion }))?.campus
+      .circle?.radiusMeters,
+    500,
+  );
+  assert.equal((await c.users.findOne({ id }))?.candidate, null);
+  assert.equal(
+    await acceptReading(
+      id,
+      { ...point, accuracy: 10, capturedAt: now + 120000 },
+      now + 120000,
+    ),
+    "inside",
+  );
+  assert.equal(
+    await c.samples.countDocuments({ user_id: id, classification: "outside" }),
+    2,
+  );
+  const user = await c.users.findOne({ id });
+  assert.ok(user);
+  assert.equal(
+    (await excursionDetail(user, event.id)).boundary?.circle?.radiusMeters,
+    500,
+  );
+  await setTracking(id, false);
+});
+
+test("A configuration version change cannot extend an event or reuse confirmation from the old radius", async () => {
+  const { circlePolygon, pointAtDistance } = await import("../src/lib/geo");
+  const { schoolCenter } = await import("../src/lib/campus-preset");
+  const circle = { center: schoolCenter, radiusMeters: 500 };
+  await saveCampus({
+    ...initialCampus,
+    circle,
+    polygon: circlePolygon(circle),
+  });
+  const id = await createUser(
+    "Version member",
+    "version@example.invalid",
+    "a-secure-password",
+  );
+  await setTracking(id, true);
+  const now = Date.now(),
+    point = pointAtDistance(schoolCenter, 90, 700);
+  await acceptReading(id, { ...point, accuracy: 10, capturedAt: now }, now);
+  assert.equal(
+    await acceptReading(
+      id,
+      { ...point, accuracy: 10, capturedAt: now + 60000 },
+      now + 60000,
+    ),
+    "outside",
+  );
+  const previousEvent = await c.excursions.findOne({
+    user_id: id,
+    active: true,
+  });
+  assert.ok(previousEvent);
+  const nextCircle = { ...circle, radiusMeters: 300 };
+  // Simulate a deployment/config migration that did not use the settings UI.
+  await c.settings.updateOne(
+    { key: "campus" },
+    {
+      $set: {
+        value: {
+          ...initialCampus,
+          circle: nextCircle,
+          polygon: circlePolygon(nextCircle),
+        },
+      },
+    },
+  );
+  assert.equal(
+    await acceptReading(
+      id,
+      { ...point, accuracy: 10, capturedAt: now + 120000 },
+      now + 120000,
+    ),
+    "pending",
+  );
+  assert.equal(
+    (await c.excursions.findOne({ id: previousEvent.id }))?.endReason,
+    "boundary_changed",
+  );
+  assert.equal(
+    await c.excursions.countDocuments({ user_id: id, active: true }),
+    0,
+  );
+  assert.equal((await c.users.findOne({ id }))?.candidate?.count, 1);
+  await setTracking(id, false);
+});
+
+test("Device-specific journeys are scoped to their owner and switching device never fabricates a return", async () => {
+  const { readJourney } = await import("../src/lib/journey");
+  const { schoolCenter } = await import("../src/lib/campus-preset");
+  const { pointAtDistance } = await import("../src/lib/geo");
+  await saveCampus(initialCampus);
+  const id = await createUser(
+    "Device member",
+    "device@example.invalid",
+    "a-secure-password",
+  );
+  await setTracking(id, true);
+  const a = {
+      deviceId: "11111111-1111-4111-8111-111111111111",
+      deviceLabel: "Android A",
+    },
+    b = {
+      deviceId: "22222222-2222-4222-8222-222222222222",
+      deviceLabel: "iOS B",
+    };
+  const now = Date.now(),
+    outside = pointAtDistance(schoolCenter, 90, 500);
+  await acceptReading(id, { ...outside, accuracy: 5, capturedAt: now }, now, a);
+  await acceptReading(
+    id,
+    { ...outside, accuracy: 5, capturedAt: now + 60000 },
+    now + 60000,
+    a,
+  );
+  await acceptReading(
+    id,
+    { ...schoolCenter, accuracy: 5, capturedAt: now + 120000 },
+    now + 120000,
+    b,
+  );
+  const event = await c.excursions.findOne({ user_id: id });
+  assert.equal(event?.deviceId, a.deviceId);
+  assert.equal(event?.endReason, "device_changed");
+  assert.equal(event?.returnedAt, null);
+  const user = await c.users.findOne({ id });
+  assert.ok(user);
+  const q = parseHistoryQuery(
+    new URLSearchParams({ from: day(now), to: day(now + 120000), userId: id }),
+  );
+  const all = await readJourney(user, q);
+  assert.equal(all.points.length, 3);
+  assert.equal(all.devices.length, 2);
+  assert.deepEqual(all.segments, [[0, 1], [2]]);
+  assert.equal((await readJourney(user, q, a.deviceId)).points.length, 2);
+  await assert.rejects(readJourney(user, { ...q, userId: "other" }));
+  await assert.rejects(
+    readJourney({ ...user, role: "admin" }, { ...q, userId: undefined }),
+  );
+  await setTracking(id, false);
+});
+
 test("Date filtering follows UTC+7 and CSV cells prevent formulas", () => {
   assert.equal(vietnamDate("2026-11-26"), Date.parse("2026-11-25T17:00:00Z"));
   assert.throws(() => vietnamDate("2026-02-30"));

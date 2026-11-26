@@ -6,6 +6,7 @@ import {
   Polygon,
   Polyline,
   CircleMarker,
+  Circle,
   Popup,
   useMap,
 } from "react-leaflet";
@@ -50,11 +51,20 @@ export default function HistoryMap({
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
       <Fit points={points} boundary={boundary} />
-      {boundary && boundary.polygon.length >= 3 && (
-        <Polygon
-          positions={boundary.polygon.map((p) => [p.lat, p.lng])}
+      {boundary?.circle ? (
+        <Circle
+          center={[boundary.circle.center.lat, boundary.circle.center.lng]}
+          radius={boundary.circle.radiusMeters}
           pathOptions={{ color: "#178771", weight: 2, fillOpacity: 0.08 }}
         />
+      ) : (
+        boundary &&
+        boundary.polygon.length >= 3 && (
+          <Polygon
+            positions={boundary.polygon.map((p) => [p.lat, p.lng])}
+            pathOptions={{ color: "#178771", weight: 2, fillOpacity: 0.08 }}
+          />
+        )
       )}
       <Polyline
         positions={points.map((p) => [p.lat, p.lng])}
@@ -70,10 +80,10 @@ export default function HistoryMap({
             pathOptions={{
               color:
                 p.classification === "outside"
-                  ? "#d95546"
+                  ? "#c32626"
                   : p.classification === "inside"
-                    ? "#167d68"
-                    : "#b48a32",
+                    ? "#087443"
+                    : "#985500",
               fillOpacity: 1,
               weight: 1,
             }}

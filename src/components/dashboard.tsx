@@ -41,9 +41,14 @@ import {
   TeamOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
-import type { Point } from "@/lib/geo";
+import { circlePolygon, validCircle, type Point } from "@/lib/geo";
 import { rosterCounts } from "@/lib/roster";
-import { schoolMapUrl } from "@/lib/campus-preset";
+import { deviceContext } from "@/lib/device-context";
+import {
+  schoolMapUrl,
+  schoolCenter,
+  schoolRadiusMeters,
+} from "@/lib/campus-preset";
 import HistoryPanel from "./history-panel";
 import {
   useLocationSharing,
@@ -122,7 +127,11 @@ export default function Dashboard() {
           colorInfo: "#167d68",
           borderRadius: 10,
           fontFamily: "Arial, Helvetica, sans-serif",
-          colorText: "#20332d",
+          colorText: "#142c24",
+          colorTextSecondary: "#435b51",
+          colorSuccess: "#087443",
+          colorWarning: "#985500",
+          colorError: "#c32626",
           colorBorder: "#e2e8e5",
           controlHeight: 40,
         },
@@ -149,6 +158,7 @@ function Screen() {
   const [createOpen, setCreateOpen] = useState(false),
     [boundaryOpen, setBoundaryOpen] = useState(false),
     [draft, setDraft] = useState<Point[]>([]),
+    [boundaryMode, setBoundaryMode] = useState<"circle" | "polygon">("circle"),
     [focus, setFocus] = useState<Point | null>(null),
     [query, setQuery] = useState("");
   const [consent, setConsent] = useState(false),
@@ -157,6 +167,17 @@ function Screen() {
   const [userForm] = Form.useForm(),
     [campusForm] = Form.useForm(),
     [loginForm] = Form.useForm();
+  const watchedCircle = Form.useWatch("circle", campusForm);
+  const previewCircle =
+    boundaryOpen && boundaryMode === "circle" && validCircle(watchedCircle)
+      ? watchedCircle
+      : undefined;
+  const previewPolygon =
+    boundaryMode === "circle"
+      ? previewCircle
+        ? circlePolygon(previewCircle)
+        : []
+      : draft;
   const sessionEpoch = useRef(0);
   const refreshSequence = useRef(0);
   const refresh = useCallback(async () => {
@@ -201,7 +222,11 @@ function Screen() {
   const gps = useLocationSharing(
     me?.id,
     !!me?.tracking,
-    (reading) => api<LocationReceipt>("location", "POST", reading),
+    (reading) =>
+      api<LocationReceipt>("location", "POST", {
+        ...reading,
+        ...deviceContext(),
+      }),
     (receipt) => {
       refreshSequence.current++;
       const update = (person: Person): Person =>
@@ -490,7 +515,15 @@ function Screen() {
   ];
   function openBoundary() {
     setDraft(campus?.polygon ?? []);
-    campusForm.setFieldsValue(campus);
+    setBoundaryMode(campus?.circle ? "circle" : "polygon");
+    setFocus(null);
+    campusForm.setFieldsValue({
+      ...campus,
+      circle: campus?.circle ?? {
+        center: schoolCenter,
+        radiusMeters: schoolRadiusMeters,
+      },
+    });
     setTab("boundary");
     setBoundaryOpen(true);
   }
@@ -499,7 +532,12 @@ function Screen() {
       const values = await campusForm.validateFields();
       if (
         await act(
-          () => api("campus", "PUT", { ...values, polygon: draft }),
+          () =>
+            api("campus", "PUT", {
+              ...values,
+              circle: boundaryMode === "circle" ? values.circle : undefined,
+              polygon: boundaryMode === "polygon" ? draft : undefined,
+            }),
           "Đã lưu ranh giới và cấu hình",
         )
       )
@@ -808,7 +846,7 @@ function Screen() {
                         detail:
                           "Tài khoản học viên đang hoạt động; không gồm admin",
                         icon: <TeamOutlined />,
-                        className: "green",
+                        className: "blue",
                       },
                       {
                         label: "Trong khuôn viên",
@@ -832,7 +870,7 @@ function Screen() {
                         className: "amber",
                       },
                     ].map((s) => (
-                      <div className="stat" key={s.label}>
+                      <div className={`stat stat-${s.className}`} key={s.label}>
                         <div>
                           <span>{s.label}</span>
                           <span className={`stat-icon ${s.className}`}>
@@ -863,6 +901,7 @@ function Screen() {
                       <div className="map-wrap">
                         <Map
                           polygon={campus?.polygon ?? []}
+                          circle={campus?.circle}
                           people={people}
                           focus={focus}
                         />
@@ -941,27 +980,33 @@ function Screen() {
                       <div>
                         <h2>
                           {boundaryOpen
-                            ? "Đang vẽ ranh giới"
+                            ? boundaryMode === "circle"
+                              ? "Xem trước bán kính"
+                              : "Đang vẽ ranh giới"
                             : "Ranh giới khuôn viên"}
                         </h2>
                         <p>
                           {boundaryOpen
-                            ? "Nhấp lần lượt các góc theo hàng rào. Đường cuối sẽ tự nối về điểm đầu."
+                            ? boundaryMode === "circle"
+                              ? "Bản xem trước chưa được lưu. Bán kính mới chỉ áp dụng sau khi bấm Lưu khuôn viên."
+                              : "Nhấp lần lượt các góc theo hàng rào. Đường cuối sẽ tự nối về điểm đầu."
                             : (campus?.boundaryNote ??
                               "Ranh giới do quản trị viên thiết lập.")}
                         </p>
                       </div>
                       <Tag>
-                        {
-                          (boundaryOpen ? draft : (campus?.polygon ?? []))
-                            .length
-                        }{" "}
-                        đỉnh
+                        {(boundaryOpen ? previewCircle : campus?.circle)
+                          ? `${(boundaryOpen ? previewCircle : campus?.circle)!.radiusMeters} m`
+                          : `${(boundaryOpen ? previewPolygon : (campus?.polygon ?? [])).length} đỉnh`}
                       </Tag>
                     </div>
                     <Map
-                      polygon={boundaryOpen ? draft : (campus?.polygon ?? [])}
-                      drawing={boundaryOpen}
+                      polygon={
+                        boundaryOpen ? previewPolygon : (campus?.polygon ?? [])
+                      }
+                      circle={boundaryOpen ? previewCircle : campus?.circle}
+                      fitRegion
+                      drawing={boundaryOpen && boundaryMode === "polygon"}
                       onPoint={(p) => setDraft((d) => [...d, p])}
                       focus={focus}
                     />
@@ -984,7 +1029,7 @@ function Screen() {
                       >
                         Đến vị trí của tôi
                       </Button>
-                      {boundaryOpen && (
+                      {boundaryOpen && boundaryMode === "polygon" && (
                         <>
                           <Button
                             icon={<UndoOutlined />}
@@ -1015,6 +1060,86 @@ function Screen() {
                     {boundaryOpen ? (
                       <>
                         <Form form={campusForm} layout="vertical">
+                          <Form.Item label="Cách xác định vùng">
+                            <Select
+                              aria-label="Cách xác định vùng"
+                              value={boundaryMode}
+                              onChange={setBoundaryMode}
+                              options={[
+                                { value: "circle", label: "Tâm và bán kính" },
+                                {
+                                  value: "polygon",
+                                  label: "Vẽ đa giác theo hàng rào",
+                                },
+                              ]}
+                            />
+                          </Form.Item>
+                          {boundaryMode === "circle" && (
+                            <>
+                              <Form.Item
+                                name={["circle", "radiusMeters"]}
+                                label="Bán kính khuôn viên (m)"
+                                rules={[
+                                  {
+                                    required: true,
+                                    type: "number",
+                                    min: 50,
+                                    max: 3000,
+                                    message: "Nhập bán kính từ 50 đến 3.000 m.",
+                                  },
+                                ]}
+                                extra="Có thể tăng lên 500 m, 1.000 m hoặc tối đa 3.000 m. Mở rộng vùng sẽ làm ít điểm bị tính là ngoài vùng hơn."
+                              >
+                                <InputNumber
+                                  aria-label="Bán kính khuôn viên (m)"
+                                  min={50}
+                                  max={3000}
+                                  step={50}
+                                  style={{ width: "100%" }}
+                                />
+                              </Form.Item>
+                              <div className="form-pair">
+                                <Form.Item
+                                  name={["circle", "center", "lat"]}
+                                  label="Vĩ độ tâm"
+                                  rules={[
+                                    {
+                                      required: true,
+                                      type: "number",
+                                      min: -85,
+                                      max: 85,
+                                    },
+                                  ]}
+                                >
+                                  <InputNumber
+                                    aria-label="Vĩ độ tâm"
+                                    min={-85}
+                                    max={85}
+                                    step={0.000001}
+                                  />
+                                </Form.Item>
+                                <Form.Item
+                                  name={["circle", "center", "lng"]}
+                                  label="Kinh độ tâm"
+                                  rules={[
+                                    {
+                                      required: true,
+                                      type: "number",
+                                      min: -180,
+                                      max: 180,
+                                    },
+                                  ]}
+                                >
+                                  <InputNumber
+                                    aria-label="Kinh độ tâm"
+                                    min={-180}
+                                    max={180}
+                                    step={0.000001}
+                                  />
+                                </Form.Item>
+                              </div>
+                            </>
+                          )}
                           <Form.Item
                             label="Tên trường"
                             name="name"
@@ -1068,7 +1193,11 @@ function Screen() {
                         <Space style={{ marginTop: 20 }}>
                           <Button
                             type="primary"
-                            disabled={draft.length < 3}
+                            disabled={
+                              boundaryMode === "circle"
+                                ? !previewCircle
+                                : draft.length < 3
+                            }
                             loading={busy}
                             onClick={saveBoundary}
                           >
@@ -1083,10 +1212,15 @@ function Screen() {
                       <>
                         <ol className="steps">
                           <li>
-                            <strong>Vẽ theo hàng rào</strong>
+                            <strong>
+                              {campus?.circle
+                                ? `Bán kính hiện tại: ${campus.circle.radiusMeters} m`
+                                : "Vẽ theo hàng rào"}
+                            </strong>
                             <p>
-                              Lưu đường đa giác bao quanh khuôn viên, bao gồm
-                              các góc và cổng trường.
+                              {campus?.circle
+                                ? `Tâm ${campus.circle.center.lat.toFixed(7)}, ${campus.circle.center.lng.toFixed(7)}. Dùng khoảng cách đến tâm để tính trong/ngoài. Có thể chỉnh tâm và bán kính hoặc đổi sang đa giác.`
+                                : "Lưu đường đa giác bao quanh khuôn viên, bao gồm các góc và cổng trường."}
                             </p>
                           </li>
                           <li>
@@ -1323,6 +1457,7 @@ function Screen() {
                       </div>
                       <Map
                         polygon={campus?.polygon ?? []}
+                        circle={campus?.circle}
                         people={[me]}
                         focus={focus ?? me.reading}
                       />

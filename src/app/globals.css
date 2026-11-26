@@ -366,7 +366,7 @@ h2 {
 }
 .page-heading p {
   font-size: 12px;
-  color: #809087;
+  color: #465f53;
   margin-bottom: 0;
   line-height: 1.7;
 }
@@ -390,7 +390,7 @@ h2 {
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
-  color: #7b897f;
+  color: #40594d;
   gap: 8px;
 }
 .stat-icon {
@@ -422,7 +422,7 @@ h2 {
 }
 .stat > small {
   font-size: 10px;
-  color: #9aa79f;
+  color: #4b6357;
   line-height: 1.5;
   display: block;
 }
@@ -444,7 +444,7 @@ h2 {
 }
 .panel-heading p {
   font-size: 11px;
-  color: #8d9a92;
+  color: #4b6357;
   margin: 7px 0 0;
   line-height: 1.6;
 }
@@ -497,7 +497,7 @@ h2 {
   gap: 17px;
   padding: 16px 20px;
   font-size: 9px;
-  color: #8b988f;
+  color: #425d4f;
   flex-wrap: wrap;
 }
 .map-legend > span {
@@ -573,7 +573,7 @@ h2 {
 }
 .person small {
   display: block;
-  color: #98a49c;
+  color: #4d6256;
   font-size: 10px;
   margin-top: 5px;
 }
@@ -590,14 +590,14 @@ h2 {
 }
 .ant-empty-description {
   font-size: 12px !important;
-  color: #92a096 !important;
+  color: #4c6255 !important;
 }
 .count {
   font-size: 11px;
   background: #edf3ef;
   padding: 4px 8px;
   border-radius: 5px;
-  color: #82948a;
+  color: #486152;
   margin-left: 8px;
 }
 .event {
@@ -642,14 +642,14 @@ h2 {
   font-size: 13px;
 }
 .event-content p {
-  color: #849087;
+  color: #4b6254;
   font-size: 12px;
   line-height: 1.6;
   margin: 8px 0;
 }
 .event-content small {
   font-size: 10px;
-  color: #9eaaa2;
+  color: #52675b;
 }
 .no-report {
   display: block;
@@ -783,7 +783,7 @@ h2 {
 }
 .coordinate span {
   font-size: 11px;
-  color: #8c9c91;
+  color: #486152;
 }
 .coordinate strong {
   font-size: 13px;
@@ -812,7 +812,7 @@ h2 {
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  color: #82948a;
+  color: #486152;
 }
 .boot p {
   margin-top: 25px;
@@ -1182,4 +1182,107 @@ footer > span:last-child {
   .ant-alert .ant-alert-action {
     margin-left: 10px;
   }
+}
+
+/* Status colors remain paired with text and icons. */
+.stat-green {
+  border-top: 4px solid #087443;
+  background: #f0faf5;
+}
+.stat-red {
+  border-top: 4px solid #c32626;
+  background: #fff4f3;
+}
+.stat-amber {
+  border-top: 4px solid #985500;
+  background: #fff8e9;
+}
+.stat-green > strong {
+  color: #075d36;
+}
+.stat-red > strong {
+  color: #ac2020;
+}
+.stat-amber > strong {
+  color: #804400;
+}
+.green {
+  color: #075d36;
+  background: #daf3e4;
+}
+.red {
+  color: #ac2020;
+  background: #ffe2df;
+}
+.amber {
+  color: #804400;
+  background: #ffedbf;
+}
+.dot.green {
+  background: #087443;
+}
+.dot.red {
+  background: #c32626;
+}
+.dot.amber {
+  background: #a35b00;
+}
+.ant-tag-green {
+  color: #075d36 !important;
+  background: #daf3e4 !important;
+  border: 1px solid #8ac6a3 !important;
+}
+.ant-tag-red {
+  color: #9f2020 !important;
+  background: #ffe2df !important;
+  border: 1px solid #e8a19a !important;
+}
+.ant-tag-gold,
+.ant-tag-orange {
+  color: #794100 !important;
+  background: #ffedbf !important;
+  border: 1px solid #d5ad57 !important;
+}
+.ant-table-thead > tr > th {
+  color: #3e594c !important;
+  font-weight: 700 !important;
+}
+.history-summary strong {
+  color: #173f6e;
+}
+.history-summary span {
+  color: #40594d;
+}
+.journey-summary {
+  margin: 0;
+  border-radius: 10px;
+}
+.journey-map {
+  height: 440px;
+}
+.ant-slider {
+  margin: 16px 12px 28px;
+}
+@media (max-width: 760px) {
+  .journey-map {
+    height: 330px;
+  }
+}
+
+.blue {
+  color: #174f95;
+  background: #e0edff;
+}
+.stat-blue {
+  border-top: 4px solid #1557b0;
+  background: #f1f6ff;
+}
+.stat-blue > strong {
+  color: #174f95;
+}
+.history-summary > div:nth-child(2) strong {
+  color: #ac2020;
+}
+.history-summary:not(.journey-summary) > div:nth-child(3) strong {
+  color: #804400;
 }

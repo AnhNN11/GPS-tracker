@@ -2,10 +2,16 @@ import { randomUUID } from "node:crypto";
 import type { ClientSession } from "mongodb";
 import { collections, transaction } from "./db";
 import { publicUser, type UserRow } from "./auth";
-import { ensureBoundary, closeExcursion, recordHistory } from "./history-store";
+import {
+  ensureBoundary,
+  closeExcursion,
+  recordHistory,
+  boundaryId,
+} from "./history-store";
 import { advanceOutside, classify, type Reading, type Candidate } from "./geo";
 import type { Campus, AlertRow } from "./models";
 import { schoolPreset } from "./campus-preset";
+import type { DeviceContext } from "./device-context";
 export type { Campus } from "./models";
 type Collections = Awaited<ReturnType<typeof collections>>;
 export const initialCampus: Campus = schoolPreset;
@@ -20,6 +26,8 @@ export async function campus(
 }
 export async function saveCampus(value: Campus) {
   await transaction(async (c, session) => {
+    const existing = await c.settings.findOne({ key: "campus" }, { session });
+    if (existing && boundaryId(existing.value) === boundaryId(value)) return;
     await ensureBoundary(c, session, value);
     await c.excursions.updateMany(
       { active: true },
@@ -90,6 +98,7 @@ export async function acceptReading(
   userId: string,
   reading: Reading,
   now = Date.now(),
+  device?: DeviceContext,
 ) {
   return transaction(async (c, session) => {
     const user = await c.users.findOne({ id: userId, enabled: 1 }, { session });
@@ -103,17 +112,22 @@ export async function acceptReading(
         "Mẫu vị trí đã cũ hoặc trùng thời điểm. Hãy lấy vị trí mới.",
       );
     const config = await campus(c, session),
-      status = classify(reading, config.polygon, config.policy);
+      status = classify(reading, config.polygon, config.policy, config.circle);
     let candidate: Candidate | null = null,
       displayed: string = status;
     if (status === "outside") {
       const next = advanceOutside(
-        user.candidate,
+        user.candidate?.campusVersion === boundaryId(config) &&
+          user.candidate?.deviceId === device?.deviceId
+          ? user.candidate
+          : null,
         reading.capturedAt,
         config.policy,
       );
       candidate = {
         ...next.candidate,
+        campusVersion: boundaryId(config),
+        ...(device ? { deviceId: device.deviceId } : {}),
         firstReading:
           next.candidate.count > 1
             ? (user.candidate?.firstReading ?? reading)
@@ -135,6 +149,7 @@ export async function acceptReading(
       candidate,
       previous: user.reading,
       receivedAt: now,
+      device,
     });
     await c.users.updateOne(
       { id: user.id },
@@ -200,6 +215,7 @@ export async function disableUser(userId: string, enabled: boolean) {
     if (!enabled) {
       await closeExcursion(c, session, userId, "account_disabled");
       await c.sessions.deleteMany({ user_id: userId }, { session });
+      await c.clientTokens.deleteMany({ user_id: userId }, { session });
       await resolveAlert(c, session, userId, "stale");
       await resolveAlert(c, session, userId, "outside");
     }

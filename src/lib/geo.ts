@@ -1,4 +1,5 @@
 export type Point = { lat: number; lng: number };
+export type CircleRegion = { center: Point; radiusMeters: number };
 export type Reading = Point & { accuracy: number; capturedAt: number };
 export type Policy = {
   buffer: number;
@@ -13,6 +14,60 @@ export const defaultPolicy: Policy = {
   staleMinutes: 5,
 };
 const earth = 6371008.8;
+export function geodesicDistance(a: Point, b: Point) {
+  const radians = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * radians,
+    dLng = (b.lng - a.lng) * radians;
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * radians) *
+      Math.cos(b.lat * radians) *
+      Math.sin(dLng / 2) ** 2;
+  return 2 * earth * Math.asin(Math.sqrt(Math.min(1, Math.max(0, h))));
+}
+export function pointAtDistance(
+  center: Point,
+  bearing: number,
+  meters: number,
+): Point {
+  const lat = (center.lat * Math.PI) / 180,
+    lng = (center.lng * Math.PI) / 180;
+  const angle = meters / earth,
+    direction = (bearing * Math.PI) / 180;
+  const nextLat = Math.asin(
+    Math.sin(lat) * Math.cos(angle) +
+      Math.cos(lat) * Math.sin(angle) * Math.cos(direction),
+  );
+  const nextLng =
+    lng +
+    Math.atan2(
+      Math.sin(direction) * Math.sin(angle) * Math.cos(lat),
+      Math.cos(angle) - Math.sin(lat) * Math.sin(nextLat),
+    );
+  return {
+    lat: (nextLat * 180) / Math.PI,
+    lng: (((nextLng * 180) / Math.PI + 540) % 360) - 180,
+  };
+}
+export function validCircle(value: unknown): value is CircleRegion {
+  const circle = value as CircleRegion | null;
+  return (
+    !!circle &&
+    Number.isFinite(circle.radiusMeters) &&
+    circle.radiusMeters >= 50 &&
+    circle.radiusMeters <= 3000 &&
+    !!circle.center &&
+    Number.isFinite(circle.center.lat) &&
+    Math.abs(circle.center.lat) <= 85 &&
+    Number.isFinite(circle.center.lng) &&
+    Math.abs(circle.center.lng) <= 180
+  );
+}
+export function circlePolygon(circle: CircleRegion): Point[] {
+  return Array.from({ length: 64 }, (_, index) =>
+    pointAtDistance(circle.center, (index * 360) / 64, circle.radiusMeters),
+  );
+}
 function project(p: Point, origin: Point) {
   return {
     x:
@@ -39,7 +94,13 @@ export function inside(p: Point, polygon: Point[]) {
   }
   return result;
 }
-export function edgeDistance(p: Point, polygon: Point[]) {
+export function edgeDistance(
+  p: Point,
+  polygon: Point[],
+  circle?: CircleRegion,
+) {
+  if (circle)
+    return Math.abs(geodesicDistance(p, circle.center) - circle.radiusMeters);
   let nearest = Infinity;
   for (let i = 0; i < polygon.length; i++) {
     const a = project(polygon[i], p),
@@ -103,16 +164,26 @@ export function classify(
   reading: Reading,
   polygon: Point[],
   policy: Policy,
+  circle?: CircleRegion,
 ): "inside" | "outside" | "uncertain" | "unconfigured" {
-  if (polygon.length < 3) return "unconfigured";
+  if (!circle && polygon.length < 3) return "unconfigured";
   if (
     reading.accuracy > policy.maxAccuracy ||
-    edgeDistance(reading, polygon) <= reading.accuracy + policy.buffer
+    edgeDistance(reading, polygon, circle) <=
+      reading.accuracy + policy.buffer + 1e-6
   )
     return "uncertain";
-  return inside(reading, polygon) ? "inside" : "outside";
+  return (
+    circle
+      ? geodesicDistance(reading, circle.center) <= circle.radiusMeters
+      : inside(reading, polygon)
+  )
+    ? "inside"
+    : "outside";
 }
 export type Candidate = {
+  deviceId?: string;
+  campusVersion?: string;
   since: number;
   last: number;
   count: number;

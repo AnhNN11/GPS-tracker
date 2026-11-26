@@ -22,6 +22,7 @@ import {
 } from "@ant-design/icons";
 import type { Person } from "@/lib/types";
 import type { LocationSample, Excursion, Campus } from "@/lib/models";
+import JourneyTool from "./journey-tool";
 const HistoryMap = dynamic(() => import("./history-map"), {
   ssr: false,
   loading: () => (
@@ -69,6 +70,7 @@ const endLabels = {
   sharing_stopped: "Đã dừng chia sẻ",
   account_disabled: "Tài khoản đã khóa",
   boundary_changed: "Đã đổi ranh giới",
+  device_changed: "Đã đổi thiết bị gửi GPS",
 };
 const sampleLabels = {
   inside: "Trong khuôn viên",
@@ -125,6 +127,7 @@ export default function HistoryPanel({
     [detail, setDetail] = useState<Detail | null>(null),
     [detailOpen, setDetailOpen] = useState(false),
     [detailLoading, setDetailLoading] = useState(false);
+  const [journeyOpen, setJourneyOpen] = useState(false);
   const detailRequest = useRef(0);
   const params = new URLSearchParams({
     from,
@@ -400,6 +403,21 @@ export default function HistoryPanel({
           )}
           <Space wrap>
             <Button
+              type="primary"
+              icon={<EnvironmentOutlined />}
+              onClick={() => {
+                if (me.role === "admin" && !userId) {
+                  message.info(
+                    "Chọn một người dùng ở bộ lọc trước khi phân tích hành trình.",
+                  );
+                  return;
+                }
+                setJourneyOpen(true);
+              }}
+            >
+              Phân tích hành trình
+            </Button>
+            <Button
               icon={<ReloadOutlined />}
               onClick={() => setReload((n) => n + 1)}
               loading={loading}
@@ -490,6 +508,16 @@ export default function HistoryPanel({
           />
         )}
       </section>
+      <JourneyTool
+        open={journeyOpen}
+        onClose={() => setJourneyOpen(false)}
+        userId={me.role === "admin" ? userId : me.id}
+        name={
+          people.find((p) => p.id === (userId || me.id))?.name ?? "Người dùng"
+        }
+        from={from}
+        to={to}
+      />
       <Modal
         open={detailOpen}
         title={

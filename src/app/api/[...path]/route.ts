@@ -22,7 +22,9 @@ import {
   setTracking,
   disableUser,
 } from "@/lib/store";
-import { validPolygon } from "@/lib/geo";
+import { validPolygon, circlePolygon } from "@/lib/geo";
+import { readJourney } from "@/lib/journey";
+import { clientApi } from "@/lib/client-api";
 import { setupStatus, createInitialAdmin } from "@/lib/setup";
 import { pushPublicKey, savePushDevice } from "@/lib/push";
 import {
@@ -57,6 +59,7 @@ async function handleRequest(
     const { path } = await ctx.params,
       route = path.join("/"),
       method = req.method;
+    if (path[0] === "client") return await clientApi(req, path.slice(1).join("/"));
     if (method !== "GET" && !validOrigin(req.headers.get("origin")))
       return NextResponse.json(
         { error: "Nguồn yêu cầu không hợp lệ." },
@@ -147,6 +150,12 @@ async function handleRequest(
       result = { user: publicUser(user) };
     } else if (route === "auth/logout" && method === "POST") {
       await endSession();
+    } else if (route === "history/journey" && method === "GET") {
+      result = await readJourney(
+        await requireUser(),
+        parseHistoryQuery(req.nextUrl.searchParams),
+        req.nextUrl.searchParams.get("deviceId") || undefined,
+      );
     } else if (route === "history" && method === "GET") {
       const user = await requireUser(),
         query = parseHistoryQuery(req.nextUrl.searchParams),
@@ -195,7 +204,13 @@ async function handleRequest(
         .object({
           name: z.string().trim().min(2).max(150),
           address: z.string().trim().min(2).max(300),
-          polygon: z.array(point).min(3).max(100),
+          polygon: z.array(point).min(3).max(100).optional(),
+          circle: z
+            .object({
+              center: point,
+              radiusMeters: z.number().min(50).max(3000),
+            })
+            .optional(),
           policy: z.object({
             buffer: z.number().min(0).max(100),
             maxAccuracy: z.number().min(5).max(200),
@@ -204,13 +219,19 @@ async function handleRequest(
           }),
         })
         .parse(await body(req));
-      if (!validPolygon(input.polygon))
+      const polygon = input.circle
+        ? circlePolygon(input.circle)
+        : input.polygon;
+      if (!polygon || (!input.circle && !validPolygon(polygon)))
         throw new Error(
           "Ranh giới phải có ít nhất 3 đỉnh, không tự cắt, diện tích ≥100 m² và kích thước ≤10 km.",
         );
       await saveCampus({
         ...input,
-        boundaryNote: "Đa giác do quản trị viên thiết lập.",
+        polygon,
+        boundaryNote: input.circle
+          ? `Vùng tạm ${input.circle.radiusMeters} m quanh tâm đã cấu hình; chưa xác minh hàng rào trường.`
+          : "Đa giác do quản trị viên thiết lập.",
       });
     } else if (route === "tracking" && method === "POST") {
       const user = await requireUser(),
@@ -226,12 +247,22 @@ async function handleRequest(
         .extend({
           accuracy: z.number().min(0).max(100000),
           capturedAt: z.number().int().positive(),
+          deviceId: z.uuid().optional(),
+          deviceLabel: z.string().trim().min(1).max(80).optional(),
         })
         .parse(await body(req));
       const receivedAt = Date.now();
+      const { deviceId, deviceLabel, ...reading } = input;
       result = {
-        status: await acceptReading(user.id, input, receivedAt),
-        reading: input,
+        status: await acceptReading(
+          user.id,
+          reading,
+          receivedAt,
+          deviceId
+            ? { deviceId, deviceLabel: deviceLabel ?? "Thiết bị" }
+            : undefined,
+        ),
+        reading,
         receivedAt,
       };
     } else if (path[0] === "alerts" && path.length === 3 && method === "POST") {

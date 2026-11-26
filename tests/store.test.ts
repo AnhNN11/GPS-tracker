@@ -40,7 +40,7 @@ test("Passwords are salted and verified without storing plaintext", () => {
   assert.ok(!verifyPassword("wrong", a));
 });
 test("MongoDB transactions preserve confirmation, stale deduplication and recovery", async () => {
-  await saveCampus({ ...initialCampus, polygon });
+  await saveCampus({ ...initialCampus, circle: undefined, polygon });
   const id = await createUser(
     "Test member",
     "test@example.invalid",

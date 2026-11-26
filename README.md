@@ -36,11 +36,17 @@ Trang mặc định của admin là **Dashboard quân số**; người dùng m�
 - CSV UTF-8 có BOM, tối đa 10.000 dòng mỗi lần xuất. Nếu nhiều hơn cần thu hẹp ngày/người dùng; server không cắt bớt dữ liệu một cách âm thầm. Các trường văn bản được chống công thức bảng tính.
 - Admin xem toàn bộ; người dùng chỉ đọc/xuất dữ liệu của mình. API lịch sử và CSV đều yêu cầu đăng nhập, phân quyền và có `Cache-Control: no-store`.
 
-Lịch sử chỉ bắt đầu từ khi triển khai bản này; không thể khôi phục các mẫu mà phiên bản cũ chưa từng lưu. Chưa tự động xóa lịch sử theo TTL. Không có ghi GPS khi trang đã đóng, không có tải bù offline; phân tích sau vẫn cần thiết bị thu và gửi được mẫu trong lúc sử dụng. Vùng mặc định gồm 64 cạnh xấp xỉ bán kính 200 m quanh ghim địa chỉ. Nguồn ghim: https://www.google.com/maps/search/?api=1&query=534%20Ph%E1%BA%A1m%20V%C4%83n%20%C4%90%E1%BB%93ng%2C%20Pleiku%2C%20Gia%20Lai (tra ngày 26/11/2026). Bán kính 200 m là cấu hình tạm để thử thuật toán, không phải kích thước hay hàng rào thực tế của trường. Giao diện và bản lịch sử giữ ghi chú về vùng tạm này.
+Lịch sử chỉ bắt đầu từ khi triển khai bản này; không thể khôi phục các mẫu mà phiên bản cũ chưa từng lưu. Chưa tự động xóa lịch sử theo TTL. Không có ghi GPS khi trang đã đóng, không có tải bù offline; phân tích sau vẫn cần thiết bị thu và gửi được mẫu trong lúc sử dụng. Vùng mặc định có tâm và bán kính 200 m quanh ghim địa chỉ. Chế độ tròn tính trực tiếp khoảng cách Haversine trên mô hình Trái Đất hình cầu, đơn vị mét; 64 điểm chỉ phục vụ giới hạn bản đồ/tương thích, không dùng để phân loại hình tròn. Nguồn ghim: https://www.google.com/maps/search/?api=1&query=534%20Ph%E1%BA%A1m%20V%C4%83n%20%C4%90%E1%BB%93ng%2C%20Pleiku%2C%20Gia%20Lai (tra ngày 26/11/2026). Bán kính 200 m là cấu hình tạm để thử thuật toán, không phải kích thước hay hàng rào thực tế của trường. Giao diện và bản lịch sử giữ ghi chú về vùng tạm này.
 
 ## Phản hồi cập nhật GPS
 
 Trang Vị trí của tôi hiển thị riêng đang lấy GPS, đang gửi, đã lưu trên máy chủ hoặc lỗi. API trả lại mẫu và thời điểm nhận; giao diện cập nhật ngay từ phản hồi này, hiển thị giây và tự đưa bản đồ đến điểm mới. Nút **Cập nhật GPS ngay** lấy mẫu mới mà không phải chờ 60 giây. Nếu GPS chính xác cao thất bại, thử lại chế độ thường; sai số thực tế vẫn được lưu và mẫu quá kém vẫn được phân loại chưa rõ. Từ chối quyền không tự động thử vượt quyền. Khi quay lại trang hoặc có mạng trở lại, thử gửi mẫu mới. Không thay thời điểm GPS bằng giờ máy chủ hay giả lập vị trí thiết bị.
+
+## Chỉnh bán kính
+
+Admin vào **Khuôn viên trường → Chỉnh sửa ranh giới**, chọn **Tâm và bán kính**. Nhập bán kính từ **50 đến 3.000 m**, hoặc thay tọa độ tâm. Bản đồ xem trước tự đổi kích thước; thay đổi chỉ áp dụng sau **Lưu khuôn viên**. Chọn **Vẽ đa giác theo hàng rào** nếu cần khớp hình dạng trường; chuyển sang đa giác không còn áp dụng bán kính.
+
+API PUT `/api/campus` nhận `circle: { center: { lat, lng }, radiusMeters }` hoặc `polygon`. Server kiểm tra quyền admin, giới hạn bán kính/tọa độ và tự tạo điểm bao bản đồ cho hình tròn; không tin đa giác gửi kèm để phân loại hình tròn. API đọc trả cùng tâm/bán kính đã lưu. Đổi bán kính tạo phiên bản ranh giới mới và ngắt chuỗi xác nhận cũ; lịch sử giữ nguyên bán kính lúc ghi nhận. Lưu lại cấu hình y hệt không kết thúc các lượt đang mở. Cấu hình cũ chỉ có đa giác vẫn được hỗ trợ.
 
 ## Ranh giới và sai số
 
@@ -70,3 +76,18 @@ Kiểm thử dùng replica set MongoDB tạm, không ghi dữ liệu thử vào 
 `npm run admin` và `npm run monitor` chỉ là tiện ích tùy chọn cho phát triển/VPS. Luồng Vercel sử dụng /setup và GitHub Actions, không yêu cầu người dùng chạy hai lệnh đó.
 
 Bản đồ dùng tile OpenStreetMap và cần mạng; chưa có ảnh vệ tinh. Chưa có khôi phục mật khẩu, audit log, cấp phép ra ngoài hay chống giả GPS.
+
+
+## Công cụ phân tích hành trình trên web
+
+Vào **Lịch sử & phân tích**, chọn một tài khoản và khoảng ngày, bấm **Phân tích hành trình**. Có bộ lọc thiết bị, bản đồ đường đi, các mốc thời gian, bảng tọa độ và nút xem từng điểm. Màu xanh lá là trong vùng, đỏ ngoài vùng, vàng/nâu là chưa rõ; màu luôn kèm nhãn chữ. Quân số tổng dùng xanh dương.
+
+Mẫu mới có mã trình duyệt/ứng dụng ngẫu nhiên cùng nhãn hệ điều hành/trình duyệt. Không dùng IMEI hay fingerprint phần cứng. Mẫu cũ không có mã được ghi rõ là chưa phân biệt thiết bị; không khôi phục hoặc suy đoán mã thiết bị cho quá khứ. CSV có thêm mã/tên thiết bị. Đổi thiết bị ngắt chuỗi xác nhận và không tính mẫu từ máy khác là bằng chứng đã quay lại.
+
+Đường nối không đi qua đoạn mất dữ liệu >130 giây, đổi phiên/ranh giới, sai số vượt ngưỡng của phiên bản ranh giới, hoặc bước nhảy >60 m/s. Không nối hai thiết bị khác nhau. Độ dài nối mẫu là ước tính, không phải quãng đường đi thực tế; không suy ra địa chỉ đã ghé hoặc vị trí trong khoảng không có GPS. Tool giới hạn 10.000 mẫu/50 phiên bản ranh giới mỗi lần và yêu cầu thu hẹp ngày nếu vượt giới hạn, không âm thầm cắt lịch sử. Member chỉ phân tích dữ liệu của mình; admin cần chọn một tài khoản.
+
+## Client chạy nền Android/iOS
+
+Mã nguồn client ở **mobile/**, xem [hướng dẫn build/cài và giới hạn](mobile/README.md). Client đóng gói giao diện cục bộ, dùng plugin GPS native và HTTP native, không dùng tab web để giả lập nền. Workflow **Mobile client build** build APK Android kiểm thử và iOS Simulator; iPhone thật cần ký bằng tài khoản Apple trên macOS/Xcode. Không tự công bố lên App Store/Google Play.
+
+Namespace `/api/client/` chỉ chấp nhận bearer token riêng, không chấp nhận cookie web. Token chỉ được cấp sau khi kiểm tra mật khẩu/rate limit, server giữ hash, hết hạn 12 giờ, buộc đúng user/device của token. Không có API tạo tài khoản/đọc dữ liệu người khác bằng bearer native. Khóa tài khoản thu hồi token; các API web vẫn giữ kiểm tra Origin/CSRF và cookie riêng. Client không lưu mật khẩu/token bền vững và chỉ bật dịch vụ sau khi người dùng đồng ý.

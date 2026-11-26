@@ -118,7 +118,34 @@ try {
     await request("state", "GET", undefined, adminCookie)
   ).json();
   assert.equal(presetState.campus.polygon.length, 64);
+  assert.equal(presetState.campus.circle.radiusMeters, 200);
   assert.ok(presetState.campus.boundaryNote.includes("chưa xác minh"));
+  const circleInput = {
+    ...presetState.campus,
+    circle: { ...presetState.campus.circle, radiusMeters: 500 },
+  };
+  assert.equal(
+    (await request("campus", "PUT", circleInput, adminCookie)).status,
+    200,
+  );
+  assert.equal(
+    (await (await request("state", "GET", undefined, adminCookie)).json())
+      .campus.circle.radiusMeters,
+    500,
+  );
+  for (const radiusMeters of [0, 49, 3001]) {
+    assert.equal(
+      (
+        await request(
+          "campus",
+          "PUT",
+          { ...circleInput, circle: { ...circleInput.circle, radiusMeters } },
+          adminCookie,
+        )
+      ).status,
+      400,
+    );
+  }
   const pushConfig = await (
     await request("push/config", "GET", undefined, adminCookie)
   ).json();
@@ -210,6 +237,10 @@ try {
     403,
   );
   assert.equal(
+    (await request("campus", "PUT", circleInput, memberCookie)).status,
+    403,
+  );
+  assert.equal(
     (
       await request(
         "tracking",
@@ -295,6 +326,30 @@ try {
   const history = await historyResponse.json();
   assert.equal(history.total, 4);
   assert.equal(history.summary.outsideSamples, 2);
+  const journey = await request(
+    "history/journey?" + dates,
+    "GET",
+    undefined,
+    memberCookie,
+  );
+  assert.equal(journey.status, 200);
+  assert.equal((await journey.json()).summary.samples, 4);
+  assert.equal(
+    (await request("history/journey?" + dates, "GET", undefined, adminCookie))
+      .status,
+    400,
+  );
+  assert.equal(
+    (
+      await request(
+        "history/journey?userId=someone-else&" + dates,
+        "GET",
+        undefined,
+        memberCookie,
+      )
+    ).status,
+    403,
+  );
   assert.equal(
     (
       await request(
@@ -426,8 +481,92 @@ try {
     (await request("state", "GET", undefined, adminCookie)).status,
     401,
   );
+  const nativeId = await (
+    await import("../src/lib/auth")
+  ).createUser("Native test", "native@example.invalid", password);
+  const deviceId = "33333333-3333-4333-8333-333333333333";
+  const nativeRequest = (route: string, token?: string, data?: unknown) =>
+    fetch(origin + "/api/client/" + route, {
+      method: data === undefined ? "GET" : "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: "Bearer " + token } : {}),
+      },
+      ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+    });
+  const nativeLogin = await nativeRequest("login", undefined, {
+    email: "native@example.invalid",
+    password,
+    deviceId,
+    deviceLabel: "Android QA",
+  });
+  assert.equal(nativeLogin.status, 200);
+  const nativeToken = (await nativeLogin.json()).token;
+  assert.equal(
+    (
+      await nativeRequest("tracking", nativeToken, {
+        enabled: true,
+        consent: false,
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await nativeRequest("tracking", nativeToken, {
+        enabled: true,
+        consent: true,
+      })
+    ).status,
+    200,
+  );
+  const nativeUpload = await nativeRequest("location", nativeToken, {
+    lat: 14.001,
+    lng: 108.001,
+    accuracy: 5,
+    capturedAt: Date.now(),
+  });
+  assert.equal(nativeUpload.status, 200);
+  assert.equal(
+    (await c.samples.findOne({ user_id: nativeId }))?.deviceId,
+    deviceId,
+  );
+  assert.equal(
+    (await request("client/me", "GET", undefined, memberCookie)).status,
+    401,
+  );
+  assert.equal(
+    (
+      await fetch(origin + "/api/users", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + nativeToken,
+          Origin: origin,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: "Denied",
+          email: "denied@example.invalid",
+          password,
+        }),
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await nativeRequest("tracking", nativeToken, {
+        enabled: false,
+        consent: false,
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await nativeRequest("logout", nativeToken, {})).status, 200);
+  assert.equal((await nativeRequest("me", nativeToken)).status, 401);
+  await (await import("../src/lib/store")).disableUser(nativeId, false);
   console.log(
-    "API checks passed: authentication, cookie, CSRF, roles, account locking, campus validation, consent, GPS history, event details, CSV, history isolation, reports, acknowledgement and session revocation.",
+    "API checks passed: auth, CSRF, radius settings, GPS receipts/history, device journeys, CSV, native bearer login, native consent/upload/logout, role isolation and revocation.",
   );
   if (process.argv.includes("--preview")) {
     const { createUser } = await import("../src/lib/auth");
@@ -448,16 +587,26 @@ try {
         index === 1
           ? schoolCenter
           : { ...schoolCenter, lat: schoolCenter.lat + 0.004 };
-      await acceptReading(
-        id,
-        { ...position, accuracy: 10, capturedAt: last - 60000 },
-        last - 60000,
-      );
-      await acceptReading(
-        id,
-        { ...position, accuracy: 10, capturedAt: last },
-        last,
-      );
+      for (let step = 0; step < 4; step++) {
+        const capturedAt = last - (3 - step) * 60000;
+        await acceptReading(
+          id,
+          {
+            ...position,
+            lng: position.lng + step * 0.0002,
+            accuracy: 10,
+            capturedAt,
+          },
+          capturedAt,
+          {
+            deviceId:
+              index === 1
+                ? "11111111-1111-4111-8111-111111111111"
+                : "22222222-2222-4222-8222-222222222222",
+            deviceLabel: index === 1 ? "Android QA" : "iOS QA",
+          },
+        );
+      }
     }
     console.log("Isolated QA preview: " + origin);
     console.log("QA login: admin@example.invalid / " + password);
