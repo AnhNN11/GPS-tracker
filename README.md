@@ -1,13 +1,13 @@
 # Campus Guard
 
-Next.js + Ant Design + MongoDB Atlas, deploy trên **Vercel Hobby**. Trường mặc định: Phân hiệu 1 Trường Thiếu sinh quân miền Trung, **534 Phạm Văn Đồng, phường Thống Nhất, tỉnh Gia Lai**, trên cơ sở trụ sở cũ Bộ Chỉ huy Quân sự tỉnh Gia Lai. Admin xác nhận ranh giới thực tế bằng cách vẽ đa giác trên bản đồ.
+Next.js + Ant Design + MongoDB Atlas, deploy trên **Vercel Hobby**. Trường mặc định: Phân hiệu 1 Trường Thiếu sinh quân miền Trung, **534 Phạm Văn Đồng, phường Thống Nhất, tỉnh Gia Lai**, trên cơ sở trụ sở cũ Bộ Chỉ huy Quân sự tỉnh Gia Lai. Đã cài sẵn vùng tạm bán kính 200 m quanh ghim địa chỉ Google Maps (14.0182432, 107.991825). Google Maps đánh dấu ghim chưa chính xác; vùng tạm không phải hàng rào đã khảo sát. Admin có thể thay bằng đa giác thực tế.
 
 ## Production trên Vercel — không cần chạy CLI trên máy cá nhân
 
 1. Cấu hình Environment Variables: `MONGODB_URI`, `MONGODB_DB=campus_guard`, `APP_ORIGIN=https://gpstracker-one.vercel.app`. URI và Origin là biến của môi trường Production; redeploy sau khi thay đổi.
 2. Mở **/setup**, nhập mã thiết lập riêng và tự chọn tên, email, mật khẩu quản trị. Có thể dùng liên kết cấp riêng dạng `/setup#setup=...`; phần fragment không gửi lên server trong URL. Sau khi nhập mã, trang xóa fragment khỏi thanh địa chỉ.
 3. Mã thiết lập được lưu dưới dạng hash, hết hạn sau 24 giờ và chỉ dùng được một lần. Chủ sở hữu cũng có thể dùng biến bí mật `ADMIN_SETUP_TOKEN` (tối thiểu 32 ký tự ngẫu nhiên) trên Vercel. Không có đăng ký admin công khai, tài khoản hay mật khẩu mặc định. Sau khi khởi tạo thành công, việc khởi tạo bị khóa bằng transaction, kể cả khi có hai yêu cầu đồng thời.
-4. Admin đăng nhập, vẽ và lưu ranh giới khuôn viên rồi cấp tài khoản người dùng.
+4. Admin đăng nhập để mở Dashboard quân số và cấp tài khoản người dùng. Vùng tính tạm được dùng ngay, kể cả chưa lưu cấu hình khuôn viên; cấu hình đa giác đã lưu luôn được ưu tiên.
 5. Admin mở **Lịch sử & phân tích**, chọn ngày và người dùng để xem các lượt ngoài khuôn viên, mẫu GPS, hành trình hoặc xuất CSV. Không có bước bật thông báo.
 6. Người dùng mở Vị trí của tôi, đồng ý chia sẻ và cấp quyền vị trí.
 
@@ -25,7 +25,7 @@ API cũng hỗ trợ `Authorization: Bearer <CRON_SECRET>` nếu chủ sở hữ
 
 ## Lưu lịch sử để phân tích sau
 
-Trang mặc định của admin là **Lịch sử & phân tích**. Không gửi Web Push và không bật popup cảnh báo trong bản này. Việc ghi nhận không yêu cầu admin mở dashboard.
+Trang mặc định của admin là **Dashboard quân số**; người dùng mở thẳng **Vị trí của tôi**. Tổng quân số chỉ gồm tài khoản học viên đang hoạt động, không gồm admin hoặc tài khoản đã khóa. GPS cũ/mất cập nhật không được tính là đang ở trường. Dashboard tự làm mới mỗi 15 giây; lịch sử tự tải lại khi có mẫu GPS mới. Không gửi Web Push và không bật popup cảnh báo trong bản này. Việc ghi nhận không yêu cầu admin mở dashboard.
 
 - Trang đang hoạt động lấy GPS mục tiêu mỗi **60 giây** và gửi về server. Mọi mẫu hợp lệ được ghi vào `location_samples`, kể cả mẫu trong vùng, ngoài vùng, chưa rõ hoặc chưa có ranh giới. Một mẫu ngoài đơn lẻ vẫn được lưu, ngay cả khi chưa đủ chuỗi xác nhận một lượt vượt vùng.
 - `excursions` ghi lượt ngoài vùng đã xác nhận: mẫu ngoài đầu tiên, lúc đủ mẫu xác nhận, mẫu ngoài cuối, mẫu quay lại (nếu có) và nguyên nhân kết thúc.
@@ -36,7 +36,11 @@ Trang mặc định của admin là **Lịch sử & phân tích**. Không gửi 
 - CSV UTF-8 có BOM, tối đa 10.000 dòng mỗi lần xuất. Nếu nhiều hơn cần thu hẹp ngày/người dùng; server không cắt bớt dữ liệu một cách âm thầm. Các trường văn bản được chống công thức bảng tính.
 - Admin xem toàn bộ; người dùng chỉ đọc/xuất dữ liệu của mình. API lịch sử và CSV đều yêu cầu đăng nhập, phân quyền và có `Cache-Control: no-store`.
 
-Lịch sử chỉ bắt đầu từ khi triển khai bản này; không thể khôi phục các mẫu mà phiên bản cũ chưa từng lưu. Chưa tự động xóa lịch sử theo TTL. Không có ghi GPS khi trang đã đóng, không có tải bù offline; phân tích sau vẫn cần thiết bị thu và gửi được mẫu trong lúc sử dụng. Tọa độ và ranh giới trường chưa được tự suy ra từ địa chỉ: admin cần vẽ/xác nhận hàng rào thực tế.
+Lịch sử chỉ bắt đầu từ khi triển khai bản này; không thể khôi phục các mẫu mà phiên bản cũ chưa từng lưu. Chưa tự động xóa lịch sử theo TTL. Không có ghi GPS khi trang đã đóng, không có tải bù offline; phân tích sau vẫn cần thiết bị thu và gửi được mẫu trong lúc sử dụng. Vùng mặc định gồm 64 cạnh xấp xỉ bán kính 200 m quanh ghim địa chỉ. Nguồn ghim: https://www.google.com/maps/search/?api=1&query=534%20Ph%E1%BA%A1m%20V%C4%83n%20%C4%90%E1%BB%93ng%2C%20Pleiku%2C%20Gia%20Lai (tra ngày 26/11/2026). Bán kính 200 m là cấu hình tạm để thử thuật toán, không phải kích thước hay hàng rào thực tế của trường. Giao diện và bản lịch sử giữ ghi chú về vùng tạm này.
+
+## Phản hồi cập nhật GPS
+
+Trang Vị trí của tôi hiển thị riêng đang lấy GPS, đang gửi, đã lưu trên máy chủ hoặc lỗi. API trả lại mẫu và thời điểm nhận; giao diện cập nhật ngay từ phản hồi này, hiển thị giây và tự đưa bản đồ đến điểm mới. Nút **Cập nhật GPS ngay** lấy mẫu mới mà không phải chờ 60 giây. Nếu GPS chính xác cao thất bại, thử lại chế độ thường; sai số thực tế vẫn được lưu và mẫu quá kém vẫn được phân loại chưa rõ. Từ chối quyền không tự động thử vượt quyền. Khi quay lại trang hoặc có mạng trở lại, thử gửi mẫu mới. Không thay thời điểm GPS bằng giờ máy chủ hay giả lập vị trí thiết bị.
 
 ## Ranh giới và sai số
 

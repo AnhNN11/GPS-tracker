@@ -10,6 +10,7 @@ export type Person = {
   trackingStarted: number | null;
   reading: Reading | null;
   status: string;
+  lastReceivedAt?: number | null;
 };
 export type CampusAlert = {
   id: string;

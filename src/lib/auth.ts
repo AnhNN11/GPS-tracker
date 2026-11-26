@@ -105,6 +105,7 @@ export function publicUser(u: UserRow) {
     status: u.status,
     trackingStarted: u.tracking_started,
     reading: u.reading,
+    lastReceivedAt: u.reading_received_at ?? null,
   };
 }
 export async function loginAllowed(email: string) {

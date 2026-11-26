@@ -12,6 +12,7 @@ export const boundaryId = (campus: Campus) =>
         address: campus.address,
         polygon: campus.polygon,
         policy: campus.policy,
+        boundaryNote: campus.boundaryNote,
       }),
     )
     .digest("hex");

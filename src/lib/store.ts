@@ -3,31 +3,20 @@ import type { ClientSession } from "mongodb";
 import { collections, transaction } from "./db";
 import { publicUser, type UserRow } from "./auth";
 import { ensureBoundary, closeExcursion, recordHistory } from "./history-store";
-import {
-  advanceOutside,
-  classify,
-  defaultPolicy,
-  type Reading,
-  type Candidate,
-} from "./geo";
+import { advanceOutside, classify, type Reading, type Candidate } from "./geo";
 import type { Campus, AlertRow } from "./models";
+import { schoolPreset } from "./campus-preset";
 export type { Campus } from "./models";
 type Collections = Awaited<ReturnType<typeof collections>>;
-export const initialCampus: Campus = {
-  name: "Phân hiệu 1 Trường Thiếu sinh quân miền Trung",
-  address: "534 Phạm Văn Đồng, phường Thống Nhất, tỉnh Gia Lai",
-  polygon: [],
-  policy: defaultPolicy,
-};
+export const initialCampus: Campus = schoolPreset;
 export async function campus(
   c?: Collections,
   session?: ClientSession,
 ): Promise<Campus> {
   const store = c ?? (await collections());
-  return (
-    (await store.settings.findOne({ key: "campus" }, { session }))?.value ??
-    initialCampus
-  );
+  const saved = (await store.settings.findOne({ key: "campus" }, { session }))
+    ?.value;
+  return saved?.polygon.length ? saved : initialCampus;
 }
 export async function saveCampus(value: Campus) {
   await transaction(async (c, session) => {
@@ -152,6 +141,7 @@ export async function acceptReading(
       {
         $set: {
           reading,
+          reading_received_at: now,
           status: displayed,
           candidate,
           tracking_session: trackingSession,

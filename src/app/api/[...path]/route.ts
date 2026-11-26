@@ -208,7 +208,10 @@ async function handleRequest(
         throw new Error(
           "Ranh giới phải có ít nhất 3 đỉnh, không tự cắt, diện tích ≥100 m² và kích thước ≤10 km.",
         );
-      await saveCampus(input);
+      await saveCampus({
+        ...input,
+        boundaryNote: "Đa giác do quản trị viên thiết lập.",
+      });
     } else if (route === "tracking" && method === "POST") {
       const user = await requireUser(),
         input = z
@@ -225,7 +228,12 @@ async function handleRequest(
           capturedAt: z.number().int().positive(),
         })
         .parse(await body(req));
-      result = { status: await acceptReading(user.id, input) };
+      const receivedAt = Date.now();
+      result = {
+        status: await acceptReading(user.id, input, receivedAt),
+        reading: input,
+        receivedAt,
+      };
     } else if (path[0] === "alerts" && path.length === 3 && method === "POST") {
       const user = await requireUser(),
         alert = await (await collections()).alerts.findOne({ id: path[1] });

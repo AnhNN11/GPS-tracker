@@ -114,6 +114,11 @@ try {
   assert.equal(login.status, 200);
   const adminCookie = login.headers.get("set-cookie")!.split(";")[0];
   assert.ok(login.headers.get("set-cookie")?.includes("HttpOnly"));
+  const presetState = await (
+    await request("state", "GET", undefined, adminCookie)
+  ).json();
+  assert.equal(presetState.campus.polygon.length, 64);
+  assert.ok(presetState.campus.boundaryNote.includes("chưa xác minh"));
   const pushConfig = await (
     await request("push/config", "GET", undefined, adminCookie)
   ).json();
@@ -226,22 +231,29 @@ try {
     ).status,
     200,
   );
-  assert.equal(
-    (
-      await request(
-        "location",
-        "POST",
-        { lat: 14.001, lng: 108.001, accuracy: 5, capturedAt: Date.now() },
-        memberCookie,
-      )
-    ).status,
-    200,
+  const postedReading = {
+    lat: 14.001,
+    lng: 108.001,
+    accuracy: 5,
+    capturedAt: Date.now(),
+  };
+  const uploaded = await request(
+    "location",
+    "POST",
+    postedReading,
+    memberCookie,
   );
+  assert.equal(uploaded.status, 200);
+  const receipt = await uploaded.json();
+  assert.deepEqual(receipt.reading, postedReading);
+  assert.equal(receipt.status, "inside");
+  assert.ok(receipt.receivedAt >= postedReading.capturedAt);
   const own = await (
     await request("state", "GET", undefined, memberCookie)
   ).json();
   assert.equal(own.users.length, 1);
   assert.equal(own.me.status, "inside");
+  assert.equal(own.me.lastReceivedAt, receipt.receivedAt);
   assert.ok(!JSON.stringify(own).includes(password));
   assert.ok(!("password" in own.me));
   const state = await (
@@ -418,6 +430,35 @@ try {
     "API checks passed: authentication, cookie, CSRF, roles, account locking, campus validation, consent, GPS history, event details, CSV, history isolation, reports, acknowledgement and session revocation.",
   );
   if (process.argv.includes("--preview")) {
+    const { createUser } = await import("../src/lib/auth");
+    const { saveCampus, setTracking } = await import("../src/lib/store");
+    const { schoolPreset, schoolCenter } =
+      await import("../src/lib/campus-preset");
+    await saveCampus(schoolPreset);
+    for (let index = 1; index <= 3; index++) {
+      const id = await createUser(
+        "Học viên kiểm thử " + index,
+        `preview${index}@example.invalid`,
+        password,
+      );
+      if (index === 3) continue;
+      await setTracking(id, true);
+      const last = Date.now();
+      const position =
+        index === 1
+          ? schoolCenter
+          : { ...schoolCenter, lat: schoolCenter.lat + 0.004 };
+      await acceptReading(
+        id,
+        { ...position, accuracy: 10, capturedAt: last - 60000 },
+        last - 60000,
+      );
+      await acceptReading(
+        id,
+        { ...position, accuracy: 10, capturedAt: last },
+        last,
+      );
+    }
     console.log("Isolated QA preview: " + origin);
     console.log("QA login: admin@example.invalid / " + password);
     await new Promise<void>((resolve) => {

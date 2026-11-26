@@ -4,6 +4,7 @@ export type Campus = {
   address: string;
   polygon: Point[];
   policy: Policy;
+  boundaryNote?: string;
 };
 export type UserRow = {
   id: string;
@@ -19,6 +20,7 @@ export type UserRow = {
   candidate: Candidate | null;
   created_at: number;
   tracking_session?: string | null;
+  reading_received_at?: number | null;
 };
 export type SampleClassification =
   "inside" | "outside" | "uncertain" | "unconfigured";

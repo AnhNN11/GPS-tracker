@@ -104,15 +104,17 @@ function span(event: EventRow) {
 export default function HistoryPanel({
   me,
   people,
+  revision = 0,
 }: {
   me: Person;
   people: Person[];
+  revision?: number;
 }) {
   const { message } = App.useApp();
   const [from, setFrom] = useState(() => localDay(Date.now() - 6 * 86400000)),
     [to, setTo] = useState(() => localDay()),
     [userId, setUserId] = useState(""),
-    [view, setView] = useState<"events" | "samples">("events"),
+    [view, setView] = useState<"events" | "samples">("samples"),
     [classification, setClassification] = useState(""),
     [page, setPage] = useState(1),
     [reload, setReload] = useState(0),
@@ -164,7 +166,7 @@ export default function HistoryPanel({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [params, reload]);
+  }, [params, reload, revision]);
   async function exportCsv() {
     setExporting(true);
     try {
@@ -526,6 +528,14 @@ export default function HistoryPanel({
                 />
               )}
               <HistoryMap points={detail.points} boundary={detail.boundary} />
+              {detail.boundary?.boundaryNote && (
+                <Alert
+                  type="info"
+                  showIcon
+                  title={detail.boundary.boundaryNote}
+                  style={{ marginTop: 12 }}
+                />
+              )}
               <p className="muted history-note">
                 Đường nối chỉ liên kết các mẫu đã nhận, không xác nhận người
                 dùng đi theo đúng đường đó. Bản đồ dùng phiên bản ranh giới tại

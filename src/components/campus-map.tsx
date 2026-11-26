@@ -38,7 +38,7 @@ function Controls({
   });
   useEffect(() => {
     if (focus) map.flyTo([focus.lat, focus.lng], 17);
-  }, [focus, map]);
+  }, [focus?.lat, focus?.lng, map]);
   useEffect(() => {
     const observer = new ResizeObserver(() => map.invalidateSize());
     observer.observe(map.getContainer());
@@ -59,7 +59,9 @@ export default function CampusMap({
   onPoint?: (p: Point) => void;
   focus?: Point | null;
 }) {
-  const center = polygon[0] ?? { lat: 13.9833, lng: 108.0 };
+  const center = focus ??
+    people.find((person) => person.reading)?.reading ??
+    polygon[0] ?? { lat: 14.0182432, lng: 107.991825 };
   return (
     <MapContainer
       center={[center.lat, center.lng]}

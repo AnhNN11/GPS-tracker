@@ -42,7 +42,13 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { Point } from "@/lib/geo";
+import { rosterCounts } from "@/lib/roster";
+import { schoolMapUrl } from "@/lib/campus-preset";
 import HistoryPanel from "./history-panel";
+import {
+  useLocationSharing,
+  type LocationReceipt,
+} from "./use-location-sharing";
 import type { Campus } from "@/lib/store";
 import type { CampusAlert, Person, State } from "@/lib/types";
 const Map = dynamic(() => import("./campus-map"), {
@@ -58,7 +64,7 @@ type Tab = "history" | "overview" | "boundary" | "people" | "alerts" | "me";
 const statuses: Record<string, { label: string; color: string }> = {
   inside: { label: "Trong khuôn viên", color: "green" },
   outside: { label: "Ngoài khuôn viên", color: "red" },
-  pending: { label: "Đang xác nhận", color: "gold" },
+  pending: { label: "Ngoài vùng · chờ thêm mẫu xác nhận", color: "gold" },
   uncertain: { label: "GPS chưa rõ", color: "default" },
   stale: { label: "Mất cập nhật", color: "orange" },
   unknown: { label: "Chưa có vị trí", color: "default" },
@@ -70,6 +76,7 @@ const time = (v: number | null) =>
         timeZone: "Asia/Ho_Chi_Minh",
         hour: "2-digit",
         minute: "2-digit",
+        second: "2-digit",
         day: "2-digit",
         month: "2-digit",
       })
@@ -136,7 +143,7 @@ function Screen() {
   const [me, setMe] = useState<Person | null>(null),
     [ready, setReady] = useState(false),
     [state, setState] = useState<State | null>(null),
-    [tab, setTab] = useState<Tab>("history"),
+    [tab, setTab] = useState<Tab>("overview"),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [createOpen, setCreateOpen] = useState(false),
@@ -145,23 +152,32 @@ function Screen() {
     [focus, setFocus] = useState<Point | null>(null),
     [query, setQuery] = useState("");
   const [consent, setConsent] = useState(false),
-    [gpsError, setGpsError] = useState(""),
     [report, setReport] = useState<CampusAlert | null>(null),
     [reportText, setReportText] = useState("");
   const [userForm] = Form.useForm(),
     [campusForm] = Form.useForm(),
     [loginForm] = Form.useForm();
   const sessionEpoch = useRef(0);
+  const refreshSequence = useRef(0);
   const refresh = useCallback(async () => {
     const epoch = sessionEpoch.current;
+    const sequence = ++refreshSequence.current;
     try {
       const next = await api<State>("state");
-      if (epoch !== sessionEpoch.current) return;
+      if (
+        epoch !== sessionEpoch.current ||
+        sequence !== refreshSequence.current
+      )
+        return;
       setState(next);
       setMe(next.me);
       setError("");
     } catch (e) {
-      if (epoch !== sessionEpoch.current) return;
+      if (
+        epoch !== sessionEpoch.current ||
+        sequence !== refreshSequence.current
+      )
+        return;
       if ((e as Error & { status?: number }).status === 401) {
         setMe(null);
         setState(null);
@@ -179,69 +195,38 @@ function Screen() {
   }, [refresh]);
   useEffect(() => {
     if (!me) return;
-    const id = setInterval(refresh, 60000);
+    const id = setInterval(refresh, 15000);
     return () => clearInterval(id);
   }, [me?.id, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!me?.tracking) return;
-    if (!navigator.geolocation) {
-      setGpsError("Trình duyệt không hỗ trợ định vị.");
-      return;
-    }
-    let active = true,
-      inFlight = false;
-    const send = () => {
-      if (inFlight) return;
-      inFlight = true;
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          if (!active) {
-            inFlight = false;
-            return;
-          }
-          try {
-            await api("location", "POST", {
-              lat: position.coords.latitude,
-              lng: position.coords.longitude,
-              accuracy: position.coords.accuracy,
-              capturedAt: Math.round(position.timestamp),
-            });
-            if (active) {
-              setGpsError("");
-              await refresh();
+  const gps = useLocationSharing(
+    me?.id,
+    !!me?.tracking,
+    (reading) => api<LocationReceipt>("location", "POST", reading),
+    (receipt) => {
+      refreshSequence.current++;
+      const update = (person: Person): Person =>
+        person.id === me?.id
+          ? {
+              ...person,
+              reading: receipt.reading,
+              status: receipt.status,
+              lastReceivedAt: receipt.receivedAt,
             }
-          } catch (e) {
-            if (active) setGpsError((e as Error).message);
-          } finally {
-            inFlight = false;
-          }
-        },
-        (e) => {
-          inFlight = false;
-          if (active)
-            setGpsError(
-              e.code === 1
-                ? "Chưa được cấp quyền vị trí. Hãy bật quyền vị trí cho trang này."
-                : e.code === 2
-                  ? "Không lấy được vị trí GPS. Hãy thử ở nơi thoáng hơn."
-                  : "Lấy vị trí quá lâu. Ứng dụng sẽ thử lại.",
-            );
-        },
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 18000 },
+          : person;
+      setMe((person) => (person ? update(person) : person));
+      setState((previous) =>
+        previous
+          ? {
+              ...previous,
+              me: update(previous.me),
+              users: previous.users.map(update),
+            }
+          : previous,
       );
-    };
-    send();
-    const id = setInterval(send, 60000);
-    const onVisible = () => {
-      if (!document.hidden) send();
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      active = false;
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [me?.id, me?.tracking, refresh]);
+      if (tab === "me") setFocus(receipt.reading);
+      void refresh();
+    },
+  );
   async function act(action: () => Promise<unknown>, success?: string) {
     setBusy(true);
     try {
@@ -262,6 +247,7 @@ function Screen() {
       const r = await api<{ user: Person }>("auth/login", "POST", values);
       sessionEpoch.current++;
       setMe(r.user);
+      setTab(r.user.role === "admin" ? "overview" : "me");
       await refresh();
       loginForm.resetFields();
     } catch (e) {
@@ -394,6 +380,11 @@ function Screen() {
   const visiblePeople = people.filter((p) =>
     `${p.name} ${p.email}`.toLowerCase().includes(query.toLowerCase()),
   );
+  const roster = rosterCounts(
+    people,
+    state?.serverTime ?? Date.now(),
+    campus?.policy.staleMinutes ?? 5,
+  );
   const navigation: { key: Tab; icon: React.ReactNode; label: string }[] = admin
     ? [
         {
@@ -401,7 +392,11 @@ function Screen() {
           icon: <HistoryOutlined />,
           label: "Lịch sử & phân tích",
         },
-        { key: "overview", icon: <DashboardOutlined />, label: "Tổng quan" },
+        {
+          key: "overview",
+          icon: <DashboardOutlined />,
+          label: "Dashboard quân số",
+        },
         {
           key: "boundary",
           icon: <EnvironmentOutlined />,
@@ -604,7 +599,7 @@ function Screen() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <a className="brand" onClick={() => setTab(admin ? "history" : "me")}>
+        <a className="brand" onClick={() => setTab(admin ? "overview" : "me")}>
           <span className="brand-symbol">
             <SafetyCertificateOutlined />
           </span>
@@ -690,12 +685,12 @@ function Screen() {
               <div className="eyebrow">
                 CAMPUS GUARD / {admin ? "QUẢN TRỊ" : "CÁ NHÂN"}
               </div>
-              <h1>{current === "overview" ? "Tổng quan khuôn viên" : title}</h1>
+              <h1>{current === "overview" ? "Dashboard quân số" : title}</h1>
               <p>
                 {current === "history"
                   ? "Tra cứu các mẫu vị trí và lượt ngoài khuôn viên để phân tích theo ngày."
                   : current === "overview"
-                    ? "Xem vị trí cuối cùng đã nhận trong khuôn viên."
+                    ? "Quân số theo tài khoản đang hoạt động và trạng thái GPS cuối cùng. Tự cập nhật mỗi 15 giây."
                     : current === "boundary"
                       ? "Thiết lập ranh giới theo đúng hàng rào thực tế của trường."
                       : current === "people"
@@ -742,9 +737,41 @@ function Screen() {
             </div>
           ) : (
             <>
+              {campus?.boundaryNote && (
+                <Alert
+                  type={
+                    campus.boundaryNote.startsWith("Vùng tạm")
+                      ? "warning"
+                      : "info"
+                  }
+                  showIcon
+                  title={campus.boundaryNote}
+                  description={
+                    campus.boundaryNote.startsWith("Vùng tạm") ? (
+                      <>
+                        Đã bật phép tính trong/ngoài theo vùng cài sẵn. Kết quả
+                        phản ánh vùng tạm này; admin có thể sửa đa giác theo
+                        khuôn viên thực tế.{" "}
+                        <a href={schoolMapUrl} target="_blank" rel="noreferrer">
+                          Xem ghim địa chỉ
+                        </a>
+                        .
+                      </>
+                    ) : undefined
+                  }
+                  style={{ marginBottom: 20 }}
+                />
+              )}
               {current === "history" && (
                 <>
-                  <HistoryPanel me={me} people={people} />
+                  <HistoryPanel
+                    me={me}
+                    people={people}
+                    revision={Math.max(
+                      0,
+                      ...people.map((p) => p.reading?.capturedAt ?? 0),
+                    )}
+                  />
                   {admin && !campus?.polygon.length && (
                     <Alert
                       type="warning"
@@ -776,36 +803,31 @@ function Screen() {
                   <section className="stats">
                     {[
                       {
-                        label: "Tài khoản người dùng",
-                        value: people.filter((p) => p.role === "member").length,
-                        detail: "Tài khoản do admin cấp",
+                        label: "Tổng quân số",
+                        value: roster.total,
+                        detail:
+                          "Tài khoản học viên đang hoạt động; không gồm admin",
                         icon: <TeamOutlined />,
                         className: "green",
                       },
                       {
                         label: "Trong khuôn viên",
-                        value: people.filter(
-                          (p) => p.tracking && p.status === "inside",
-                        ).length,
+                        value: roster.inside,
                         detail: "GPS xác nhận trong ranh giới",
                         icon: <CheckCircleOutlined />,
                         className: "green",
                       },
                       {
                         label: "Ngoài khuôn viên",
-                        value: people.filter(
-                          (p) => p.tracking && p.status === "outside",
-                        ).length,
+                        value: roster.outside,
                         detail: "Đã qua bước xác nhận",
                         icon: <EnvironmentOutlined />,
                         className: "red",
                       },
                       {
-                        label: "Mất cập nhật",
-                        value: people.filter(
-                          (p) => p.tracking && p.status === "stale",
-                        ).length,
-                        detail: `Quá ${campus?.policy.staleMinutes} phút không có vị trí`,
+                        label: "Chưa xác định",
+                        value: roster.unknown,
+                        detail: "Chưa GPS, mất cập nhật hoặc đang xác nhận",
                         icon: <FieldTimeOutlined />,
                         className: "amber",
                       },
@@ -822,11 +844,16 @@ function Screen() {
                       </div>
                     ))}
                   </section>
+                  <div className="inline-note">
+                    Quân số có GPS mới: {roster.fresh} / {roster.total}. Không
+                    có GPS không được tính là đã rời trường. Dữ liệu dashboard:{" "}
+                    {time(state.serverTime)}.
+                  </div>
                   <section className="overview-grid">
                     <div className="panel map-panel">
                       <div className="panel-heading">
                         <div>
-                          <h2>Bản đồ khuôn viên</h2>
+                          <h2>Bản đồ vị trí đã nhận</h2>
                           <p>{campus?.address}</p>
                         </div>
                         <Tag bordered={false} color="green">
@@ -863,7 +890,7 @@ function Screen() {
                     </div>
                     <div className="panel activity">
                       <div className="panel-heading">
-                        <h2>Cảnh báo gần đây</h2>
+                        <h2>Sự kiện GPS gần đây</h2>
                         <Badge count={activeAlerts.length} color="#d28d18" />
                       </div>
                       {alertCards(state.alerts.slice(0, 3))}
@@ -872,7 +899,7 @@ function Screen() {
                         className="view-all"
                         onClick={() => setTab("alerts")}
                       >
-                        Xem tất cả cảnh báo <ArrowRightOutlined />
+                        Xem tất cả sự kiện <ArrowRightOutlined />
                       </Button>
                     </div>
                   </section>
@@ -920,7 +947,8 @@ function Screen() {
                         <p>
                           {boundaryOpen
                             ? "Nhấp lần lượt các góc theo hàng rào. Đường cuối sẽ tự nối về điểm đầu."
-                            : "Ranh giới do quản trị viên xác nhận."}
+                            : (campus?.boundaryNote ??
+                              "Ranh giới do quản trị viên thiết lập.")}
                         </p>
                       </div>
                       <Tag>
@@ -1182,11 +1210,11 @@ function Screen() {
                           </span>
                         </div>
                       )}
-                      {gpsError && (
+                      {gps.error && (
                         <Alert
                           type="error"
                           showIcon
-                          title={gpsError}
+                          title={gps.error}
                           style={{ marginBottom: 16 }}
                         />
                       )}
@@ -1213,21 +1241,50 @@ function Screen() {
                                     enabled: true,
                                     consent,
                                   }),
-                                "Đã bật chia sẻ vị trí",
+                                "Đã bật chia sẻ. Đang lấy mẫu GPS đầu tiên…",
                               )
                             }
                           >
-                            Bắt đầu chia sẻ
+                            Bật chia sẻ và lấy GPS
                           </Button>
                         </>
                       ) : (
                         <>
                           <Alert
-                            type="success"
+                            type={
+                              gps.phase === "error"
+                                ? "error"
+                                : me.reading
+                                  ? "success"
+                                  : "info"
+                            }
                             showIcon
-                            title="Đang bật chia sẻ vị trí"
-                            description="Hệ thống có thể cảnh báo admin nếu mất cập nhật."
+                            title={
+                              gps.phase === "locating"
+                                ? "Đang lấy vị trí từ thiết bị…"
+                                : gps.phase === "sending"
+                                  ? "Đang gửi GPS lên máy chủ…"
+                                  : gps.phase === "error"
+                                    ? "Chưa gửi được mẫu GPS mới"
+                                    : me.reading
+                                      ? "Máy chủ đã lưu vị trí của bạn"
+                                      : "Đang chờ mẫu GPS đầu tiên"
+                            }
+                            description={
+                              me.reading
+                                ? `GPS: ${time(me.reading.capturedAt)} · Máy chủ nhận: ${time(me.lastReceivedAt ?? null)}. Mẫu tiếp theo sau khoảng 60 giây.`
+                                : "Bật chia sẻ chưa đồng nghĩa đã có GPS. Hãy cấp quyền vị trí khi trình duyệt hỏi."
+                            }
                           />
+                          <Button
+                            block
+                            type="primary"
+                            icon={<ReloadOutlined />}
+                            loading={gps.loading}
+                            onClick={() => void gps.captureNow()}
+                          >
+                            Cập nhật GPS ngay
+                          </Button>
                           <Button
                             block
                             danger
