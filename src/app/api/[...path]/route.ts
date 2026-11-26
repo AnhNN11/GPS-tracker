@@ -24,7 +24,6 @@ import {
 } from "@/lib/store";
 import { validPolygon, circlePolygon } from "@/lib/geo";
 import { readJourney } from "@/lib/journey";
-import { clientApi } from "@/lib/client-api";
 import { setupStatus, createInitialAdmin } from "@/lib/setup";
 import { pushPublicKey, savePushDevice } from "@/lib/push";
 import {
@@ -59,7 +58,6 @@ async function handleRequest(
     const { path } = await ctx.params,
       route = path.join("/"),
       method = req.method;
-    if (path[0] === "client") return await clientApi(req, path.slice(1).join("/"));
     if (method !== "GET" && !validOrigin(req.headers.get("origin")))
       return NextResponse.json(
         { error: "Nguồn yêu cầu không hợp lệ." },

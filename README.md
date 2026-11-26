@@ -86,8 +86,8 @@ Mẫu mới có mã trình duyệt/ứng dụng ngẫu nhiên cùng nhãn hệ �
 
 Đường nối không đi qua đoạn mất dữ liệu >130 giây, đổi phiên/ranh giới, sai số vượt ngưỡng của phiên bản ranh giới, hoặc bước nhảy >60 m/s. Không nối hai thiết bị khác nhau. Độ dài nối mẫu là ước tính, không phải quãng đường đi thực tế; không suy ra địa chỉ đã ghé hoặc vị trí trong khoảng không có GPS. Tool giới hạn 10.000 mẫu/50 phiên bản ranh giới mỗi lần và yêu cầu thu hẹp ngày nếu vượt giới hạn, không âm thầm cắt lịch sử. Member chỉ phân tích dữ liệu của mình; admin cần chọn một tài khoản.
 
-## Client chạy nền Android/iOS
+## Giới hạn của client web/PWA
 
-Mã nguồn client ở **mobile/**, xem [hướng dẫn build/cài và giới hạn](mobile/README.md). Client đóng gói giao diện cục bộ, dùng plugin GPS native và HTTP native, không dùng tab web để giả lập nền. Workflow **Mobile client build** build APK Android kiểm thử và iOS Simulator; iPhone thật cần ký bằng tài khoản Apple trên macOS/Xcode. Không tự công bố lên App Store/Google Play.
+Bản hiện tại chỉ dùng web/PWA. Service Worker không có API GPS để ghi vị trí liên tục ở nền. Khi khóa màn hình hoặc chuyển ứng dụng, Android/iOS có thể ngừng/suspend trang. Thêm vào màn hình chính không bảo đảm GPS nền.
 
-Namespace `/api/client/` chỉ chấp nhận bearer token riêng, không chấp nhận cookie web. Token chỉ được cấp sau khi kiểm tra mật khẩu/rate limit, server giữ hash, hết hạn 12 giờ, buộc đúng user/device của token. Không có API tạo tài khoản/đọc dữ liệu người khác bằng bearer native. Khóa tài khoản thu hồi token; các API web vẫn giữ kiểm tra Origin/CSRF và cookie riêng. Client không lưu mật khẩu/token bền vững và chỉ bật dịch vụ sau khi người dùng đồng ý.
+Trong Vị trí của tôi có tùy chọn **Giữ màn hình sáng khi đang chia sẻ** bằng Screen Wake Lock nếu trình duyệt hỗ trợ. Khóa chỉ hoạt động khi trang đang hiển thị; hệ điều hành có thể từ chối/thu hồi. Khi trở lại trang, lấy mẫu GPS mới và thử giữ màn hình sáng lại nếu tùy chọn còn bật. Mất dữ liệu được thể hiện là chưa rõ/mất cập nhật, không suy đoán vị trí nền.

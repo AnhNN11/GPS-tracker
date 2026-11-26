@@ -215,7 +215,6 @@ export async function disableUser(userId: string, enabled: boolean) {
     if (!enabled) {
       await closeExcursion(c, session, userId, "account_disabled");
       await c.sessions.deleteMany({ user_id: userId }, { session });
-      await c.clientTokens.deleteMany({ user_id: userId }, { session });
       await resolveAlert(c, session, userId, "stale");
       await resolveAlert(c, session, userId, "outside");
     }

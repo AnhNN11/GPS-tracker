@@ -7,10 +7,4 @@ data/
 
 # Local UI verification images
 artifacts/
-mobile/dist/
-mobile/android/.gradle/
-mobile/android/build/
-mobile/android/app/build/
-*.jks
-*.keystore
-mobile/build/
+/mobile/

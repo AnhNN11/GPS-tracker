@@ -50,6 +50,7 @@ import {
   schoolRadiusMeters,
 } from "@/lib/campus-preset";
 import HistoryPanel from "./history-panel";
+import { useScreenAwake } from "./use-screen-awake";
 import {
   useLocationSharing,
   type LocationReceipt,
@@ -162,6 +163,7 @@ function Screen() {
     [focus, setFocus] = useState<Point | null>(null),
     [query, setQuery] = useState("");
   const [consent, setConsent] = useState(false),
+    [keepScreenOn, setKeepScreenOn] = useState(false),
     [report, setReport] = useState<CampusAlert | null>(null),
     [reportText, setReportText] = useState("");
   const [userForm] = Form.useForm(),
@@ -179,6 +181,7 @@ function Screen() {
         : []
       : draft;
   const sessionEpoch = useRef(0);
+  const screenAwake = useScreenAwake(keepScreenOn && !!me?.tracking);
   const refreshSequence = useRef(0);
   const refresh = useCallback(async () => {
     const epoch = sessionEpoch.current;
@@ -288,6 +291,7 @@ function Screen() {
       setMe(null);
       setState(null);
       setConsent(false);
+      setKeepScreenOn(false);
     } catch (e) {
       message.error((e as Error).message);
     }
@@ -1317,7 +1321,7 @@ function Screen() {
                     showIcon
                     type="warning"
                     title="Giới hạn của phiên bản web"
-                    description="Giữ trang mở để gửi vị trí, mục tiêu mỗi 60 giây. Khóa màn hình hoặc chuyển ứng dụng có thể dừng cập nhật. Muốn định vị nền ổn định cần bổ sung ứng dụng Android/iOS."
+                    description="Giữ trang mở để gửi vị trí, mục tiêu mỗi 60 giây. Khóa màn hình hoặc chuyển ứng dụng có thể dừng cập nhật. Cài web/PWA vào màn hình chính cũng không bảo đảm GPS chạy nền."
                     style={{ marginBottom: 22 }}
                   />
                   <div className="personal-grid">
@@ -1419,6 +1423,23 @@ function Screen() {
                           >
                             Cập nhật GPS ngay
                           </Button>
+                          <Checkbox
+                            checked={keepScreenOn}
+                            disabled={!screenAwake.supported}
+                            onChange={(event) =>
+                              setKeepScreenOn(event.target.checked)
+                            }
+                          >
+                            Giữ màn hình sáng khi đang chia sẻ
+                          </Checkbox>
+                          <p className="muted" role="status">
+                            {screenAwake.active
+                              ? "Đang giữ màn hình sáng khi trang hiển thị. Đây không phải định vị nền."
+                              : screenAwake.error ||
+                                (!screenAwake.supported
+                                  ? "Trình duyệt này chưa hỗ trợ giữ màn hình sáng."
+                                  : "Tùy chọn này chỉ có tác dụng khi trang đang hiển thị; hệ điều hành vẫn có thể thu hồi.")}
+                          </p>
                           <Button
                             block
                             danger

@@ -96,10 +96,3 @@ export type PushDevice = {
   keys: { p256dh: string; auth: string };
   createdAt: number;
 };
-export type ClientToken = {
-  tokenHash: string;
-  user_id: string;
-  deviceId: string;
-  deviceLabel: string;
-  expiresAt: Date;
-};

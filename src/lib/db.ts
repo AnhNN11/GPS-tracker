@@ -9,7 +9,6 @@ import type {
   LocationSample,
   BoundaryVersion,
   Excursion,
-  ClientToken,
 } from "./models";
 nextEnv.loadEnvConfig(process.cwd());
 type SessionRow = {
@@ -37,15 +36,6 @@ async function connect() {
     await client.connect();
     const db = client.db(process.env.MONGODB_DB || "campus_guard");
     await Promise.all([
-      db
-        .collection("client_tokens")
-        .createIndex({ tokenHash: 1 }, { unique: true }),
-      db
-        .collection("client_tokens")
-        .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
-      db
-        .collection("client_tokens")
-        .createIndex({ user_id: 1, deviceId: 1 }, { unique: true }),
       db.collection("users").createIndex({ id: 1 }, { unique: true }),
       db.collection("users").createIndex({ email: 1 }, { unique: true }),
       db
@@ -112,7 +102,6 @@ export async function collections() {
   const db = (await getClient()).db(process.env.MONGODB_DB || "campus_guard");
   return {
     users: db.collection<UserRow>("users"),
-    clientTokens: db.collection<ClientToken>("client_tokens"),
     sessions: db.collection<SessionRow>("sessions"),
     settings: db.collection<{ key: string; value: Campus }>("settings"),
     alerts: db.collection<AlertRow>("alerts"),
