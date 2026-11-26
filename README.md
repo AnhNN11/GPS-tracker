@@ -44,7 +44,7 @@ Trang Vị trí của tôi hiển thị riêng đang lấy GPS, đang gửi, đ�
 
 ## Chỉnh bán kính
 
-Admin vào **Khuôn viên trường → Chỉnh sửa ranh giới**, chọn **Tâm và bán kính**. Nhập bán kính từ **50 đến 3.000 m**, hoặc thay tọa độ tâm. Bản đồ xem trước tự đổi kích thước; thay đổi chỉ áp dụng sau **Lưu khuôn viên**. Chọn **Vẽ đa giác theo hàng rào** nếu cần khớp hình dạng trường; chuyển sang đa giác không còn áp dụng bán kính.
+Admin vào **Khuôn viên trường → Kéo chỉnh bán kính** (hoặc Chỉnh sửa ranh giới), chọn **Tâm và bán kính**. Kéo nút **↔** trên viền xanh để phóng to/thu nhỏ trực tiếp bằng chuột hoặc ngón tay; kéo nút **✚** để dời tâm. Ô bán kính và tọa độ đồng bộ với thao tác kéo. Nút **Xem toàn vùng** căn lại bản đồ; bản đồ không tự zoom trong lúc chỉnh để điểm kéo không nhảy. Nút **Lưu bán kính** dưới bản đồ áp dụng thay đổi; nháp không tự ghi lên máy chủ. Có thể dùng phím mũi tên khi nút ↔ được focus để chỉnh mỗi bước 10 m. Nhập bán kính từ **50 đến 3.000 m**, hoặc thay tọa độ tâm. Vùng xanh xem trước đổi kích thước; thay đổi chỉ áp dụng sau **Lưu khuôn viên**. Chọn **Vẽ đa giác theo hàng rào** nếu cần khớp hình dạng trường; chuyển sang đa giác không còn áp dụng bán kính.
 
 API PUT `/api/campus` nhận `circle: { center: { lat, lng }, radiusMeters }` hoặc `polygon`. Server kiểm tra quyền admin, giới hạn bán kính/tọa độ và tự tạo điểm bao bản đồ cho hình tròn; không tin đa giác gửi kèm để phân loại hình tròn. API đọc trả cùng tâm/bán kính đã lưu. Đổi bán kính tạo phiên bản ranh giới mới và ngắt chuỗi xác nhận cũ; lịch sử giữ nguyên bán kính lúc ghi nhận. Lưu lại cấu hình y hệt không kết thúc các lượt đang mở. Cấu hình cũ chỉ có đa giác vẫn được hỗ trợ.
 

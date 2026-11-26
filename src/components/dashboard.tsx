@@ -160,6 +160,7 @@ function Screen() {
     [boundaryOpen, setBoundaryOpen] = useState(false),
     [draft, setDraft] = useState<Point[]>([]),
     [boundaryMode, setBoundaryMode] = useState<"circle" | "polygon">("circle"),
+    [regionFitRevision, setRegionFitRevision] = useState(0),
     [focus, setFocus] = useState<Point | null>(null),
     [query, setQuery] = useState("");
   const [consent, setConsent] = useState(false),
@@ -758,9 +759,11 @@ function Screen() {
                   icon={<SettingOutlined />}
                   onClick={openBoundary}
                 >
-                  {campus?.polygon.length
-                    ? "Chỉnh sửa ranh giới"
-                    : "Thiết lập khuôn viên"}
+                  {campus?.circle
+                    ? "Kéo chỉnh bán kính"
+                    : campus?.polygon.length
+                      ? "Chỉnh sửa ranh giới"
+                      : "Thiết lập khuôn viên"}
                 </Button>
               ) : null}
             </Space>
@@ -985,14 +988,14 @@ function Screen() {
                         <h2>
                           {boundaryOpen
                             ? boundaryMode === "circle"
-                              ? "Xem trước bán kính"
+                              ? "Kéo để chỉnh bán kính"
                               : "Đang vẽ ranh giới"
                             : "Ranh giới khuôn viên"}
                         </h2>
                         <p>
                           {boundaryOpen
                             ? boundaryMode === "circle"
-                              ? "Bản xem trước chưa được lưu. Bán kính mới chỉ áp dụng sau khi bấm Lưu khuôn viên."
+                              ? "Kéo nút ↔ ở viền xanh để phóng to/thu nhỏ; kéo nút ✚ để dời tâm. Bấm Lưu bán kính để áp dụng."
                               : "Nhấp lần lượt các góc theo hàng rào. Đường cuối sẽ tự nối về điểm đầu."
                             : (campus?.boundaryNote ??
                               "Ranh giới do quản trị viên thiết lập.")}
@@ -1009,12 +1012,38 @@ function Screen() {
                         boundaryOpen ? previewPolygon : (campus?.polygon ?? [])
                       }
                       circle={boundaryOpen ? previewCircle : campus?.circle}
+                      onCircleChange={
+                        boundaryOpen && boundaryMode === "circle"
+                          ? (value) =>
+                              campusForm.setFieldsValue({ circle: value })
+                          : undefined
+                      }
+                      fitRevision={regionFitRevision}
                       fitRegion
                       drawing={boundaryOpen && boundaryMode === "polygon"}
                       onPoint={(p) => setDraft((d) => [...d, p])}
                       focus={focus}
                     />
                     <div className="map-tools">
+                      {(boundaryOpen ? previewCircle : campus?.circle) && (
+                        <Button
+                          onClick={() =>
+                            setRegionFitRevision((value) => value + 1)
+                          }
+                        >
+                          Xem toàn vùng
+                        </Button>
+                      )}
+                      {boundaryOpen && boundaryMode === "circle" && (
+                        <Button
+                          type="primary"
+                          loading={busy}
+                          disabled={!previewCircle}
+                          onClick={saveBoundary}
+                        >
+                          Lưu bán kính
+                        </Button>
+                      )}
                       <Button
                         icon={<AimOutlined />}
                         onClick={() =>
@@ -1253,7 +1282,9 @@ function Screen() {
                           </li>
                         </ol>
                         <Button block type="primary" onClick={openBoundary}>
-                          Chỉnh sửa ranh giới
+                          {campus?.circle
+                            ? "Kéo chỉnh bán kính"
+                            : "Chỉnh sửa ranh giới"}
                         </Button>
                       </>
                     )}

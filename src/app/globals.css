@@ -1280,6 +1280,32 @@ footer > span:last-child {
 .stat-blue > strong {
   color: #174f95;
 }
+.circle-edit-marker {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 3px solid #087443;
+  background: #fff;
+  color: #075d36;
+  box-shadow: 0 2px 12px #123c2745;
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1;
+  touch-action: none;
+  user-select: none;
+}
+.circle-radius-handle {
+  cursor: ew-resize;
+}
+.circle-center-handle {
+  border-color: #1557b0;
+  color: #1557b0;
+  cursor: grab;
+}
+.circle-edit-marker:focus-visible {
+  outline: 4px solid #facc15;
+  outline-offset: 3px;
+}
 .history-summary > div:nth-child(2) strong {
   color: #ac2020;
 }
