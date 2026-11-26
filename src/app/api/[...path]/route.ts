@@ -24,7 +24,13 @@ import {
 } from "@/lib/store";
 import { validPolygon } from "@/lib/geo";
 import { setupStatus, createInitialAdmin } from "@/lib/setup";
-import { pushPublicKey, savePushDevice, deliverPendingPush } from "@/lib/push";
+import { pushPublicKey, savePushDevice } from "@/lib/push";
+import {
+  parseHistoryQuery,
+  readHistory,
+  excursionDetail,
+  historyCsv,
+} from "@/lib/history";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 const point = z.object({
@@ -141,6 +147,26 @@ async function handleRequest(
       result = { user: publicUser(user) };
     } else if (route === "auth/logout" && method === "POST") {
       await endSession();
+    } else if (route === "history" && method === "GET") {
+      const user = await requireUser(),
+        query = parseHistoryQuery(req.nextUrl.searchParams),
+        csv = req.nextUrl.searchParams.get("format") === "csv";
+      const history = await readHistory(user, query, csv);
+      if (csv)
+        return new NextResponse(historyCsv(query.view, history.rows), {
+          headers: {
+            "Content-Type": "text/csv; charset=utf-8",
+            "Content-Disposition": `attachment; filename="gps-${query.view}-${query.from}-${query.to}.csv"`,
+          },
+        });
+      result = history;
+    } else if (
+      path[0] === "history" &&
+      path[1] === "events" &&
+      path.length === 3 &&
+      method === "GET"
+    ) {
+      result = await excursionDetail(await requireUser(), path[2]);
     } else if (route === "state" && method === "GET") {
       result = await dashboard(await requireUser());
     } else if (route === "users" && method === "POST") {
@@ -200,7 +226,6 @@ async function handleRequest(
         })
         .parse(await body(req));
       result = { status: await acceptReading(user.id, input) };
-      await deliverPendingPush(1).catch(() => undefined);
     } else if (path[0] === "alerts" && path.length === 3 && method === "POST") {
       const user = await requireUser(),
         alert = await (await collections()).alerts.findOne({ id: path[1] });

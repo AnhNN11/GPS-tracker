@@ -29,6 +29,7 @@ import {
   BellOutlined,
   CheckCircleOutlined,
   DashboardOutlined,
+  HistoryOutlined,
   EnvironmentOutlined,
   FieldTimeOutlined,
   GlobalOutlined,
@@ -41,7 +42,7 @@ import {
   UndoOutlined,
 } from "@ant-design/icons";
 import type { Point } from "@/lib/geo";
-import { enableBrowserPush, disableBrowserPush } from "@/lib/browser-push";
+import HistoryPanel from "./history-panel";
 import type { Campus } from "@/lib/store";
 import type { CampusAlert, Person, State } from "@/lib/types";
 const Map = dynamic(() => import("./campus-map"), {
@@ -53,7 +54,7 @@ const Map = dynamic(() => import("./campus-map"), {
     </div>
   ),
 });
-type Tab = "overview" | "boundary" | "people" | "alerts" | "me";
+type Tab = "history" | "overview" | "boundary" | "people" | "alerts" | "me";
 const statuses: Record<string, { label: string; color: string }> = {
   inside: { label: "Trong khuôn viên", color: "green" },
   outside: { label: "Ngoài khuôn viên", color: "red" },
@@ -135,7 +136,7 @@ function Screen() {
   const [me, setMe] = useState<Person | null>(null),
     [ready, setReady] = useState(false),
     [state, setState] = useState<State | null>(null),
-    [tab, setTab] = useState<Tab>("overview"),
+    [tab, setTab] = useState<Tab>("history"),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [createOpen, setCreateOpen] = useState(false),
@@ -150,10 +151,7 @@ function Screen() {
   const [userForm] = Form.useForm(),
     [campusForm] = Form.useForm(),
     [loginForm] = Form.useForm();
-  const notified = useRef<Set<string>>(new Set()),
-    notificationsOn = useRef(false);
   const sessionEpoch = useRef(0);
-  const alertBaseline = useRef<string | null>(null);
   const refresh = useCallback(async () => {
     const epoch = sessionEpoch.current;
     try {
@@ -181,7 +179,7 @@ function Screen() {
   }, [refresh]);
   useEffect(() => {
     if (!me) return;
-    const id = setInterval(refresh, 15000);
+    const id = setInterval(refresh, 60000);
     return () => clearInterval(id);
   }, [me?.id, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -233,7 +231,7 @@ function Screen() {
       );
     };
     send();
-    const id = setInterval(send, 20000);
+    const id = setInterval(send, 60000);
     const onVisible = () => {
       if (!document.hidden) send();
     };
@@ -244,32 +242,6 @@ function Screen() {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [me?.id, me?.tracking, refresh]);
-  useEffect(() => {
-    if (!state || me?.role !== "admin") return;
-    if (alertBaseline.current !== me.id) {
-      alertBaseline.current = me.id;
-      state.alerts.forEach((a) => notified.current.add(a.id));
-      return;
-    }
-    for (const alert of state.alerts) {
-      if (
-        !alert.resolved_at &&
-        !alert.acknowledged_at &&
-        !notified.current.has(alert.id)
-      ) {
-        notified.current.add(alert.id);
-        if (!notificationsOn.current)
-          message.warning({
-            content:
-              (alert.type === "outside"
-                ? "Ngoài khuôn viên: "
-                : "Mất cập nhật: ") + alert.user_name,
-            key: alert.id,
-            duration: 6,
-          });
-      }
-    }
-  }, [state, me?.role]);
   async function act(action: () => Promise<unknown>, success?: string) {
     setBusy(true);
     try {
@@ -300,15 +272,11 @@ function Screen() {
   }
   async function logout() {
     try {
-      await disableBrowserPush().catch(() => undefined);
       await api("auth/logout", "POST", {});
       sessionEpoch.current++;
       setMe(null);
       setState(null);
       setConsent(false);
-      notificationsOn.current = false;
-      notified.current.clear();
-      alertBaseline.current = null;
     } catch (e) {
       message.error((e as Error).message);
     }
@@ -350,7 +318,7 @@ function Screen() {
               <span>
                 Phân hiệu 1<br />
                 <strong>Trường Thiếu sinh quân miền Trung</strong>
-                <small>Phường Thống Nhất · Pleiku · Gia Lai</small>
+                <small>534 Phạm Văn Đồng · Thống Nhất · Gia Lai</small>
               </span>
             </div>
           </div>
@@ -428,6 +396,11 @@ function Screen() {
   );
   const navigation: { key: Tab; icon: React.ReactNode; label: string }[] = admin
     ? [
+        {
+          key: "history",
+          icon: <HistoryOutlined />,
+          label: "Lịch sử & phân tích",
+        },
         { key: "overview", icon: <DashboardOutlined />, label: "Tổng quan" },
         {
           key: "boundary",
@@ -435,14 +408,21 @@ function Screen() {
           label: "Khuôn viên trường",
         },
         { key: "people", icon: <TeamOutlined />, label: "Tài khoản" },
-        { key: "alerts", icon: <BellOutlined />, label: "Cảnh báo" },
+        { key: "alerts", icon: <BellOutlined />, label: "Sự kiện" },
         { key: "me", icon: <AimOutlined />, label: "Vị trí của tôi" },
       ]
     : [
+        { key: "history", icon: <HistoryOutlined />, label: "Lịch sử của tôi" },
         { key: "me", icon: <AimOutlined />, label: "Vị trí của tôi" },
-        { key: "alerts", icon: <BellOutlined />, label: "Cảnh báo & báo cáo" },
+        { key: "alerts", icon: <BellOutlined />, label: "Sự kiện & báo cáo" },
       ];
-  const current = admin ? tab : tab === "alerts" ? "alerts" : "me";
+  const current = admin
+    ? tab
+    : tab === "alerts"
+      ? "alerts"
+      : tab === "history"
+        ? "history"
+        : "me";
   const title = navigation.find((n) => n.key === current)?.label ?? "Tổng quan";
   const peopleColumns = [
     {
@@ -624,7 +604,7 @@ function Screen() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <a className="brand" onClick={() => setTab(admin ? "overview" : "me")}>
+        <a className="brand" onClick={() => setTab(admin ? "history" : "me")}>
           <span className="brand-symbol">
             <SafetyCertificateOutlined />
           </span>
@@ -712,15 +692,17 @@ function Screen() {
               </div>
               <h1>{current === "overview" ? "Tổng quan khuôn viên" : title}</h1>
               <p>
-                {current === "overview"
-                  ? "Nắm bắt vị trí, kết nối và an toàn trong khuôn viên."
-                  : current === "boundary"
-                    ? "Thiết lập ranh giới theo đúng hàng rào thực tế của trường."
-                    : current === "people"
-                      ? "Cấp tài khoản và quản lý quyền truy cập của người dùng."
-                      : current === "alerts"
-                        ? "Theo dõi sự kiện và báo cáo của người dùng."
-                        : "Chủ động chia sẻ và kiểm tra vị trí của bạn."}
+                {current === "history"
+                  ? "Tra cứu các mẫu vị trí và lượt ngoài khuôn viên để phân tích theo ngày."
+                  : current === "overview"
+                    ? "Xem vị trí cuối cùng đã nhận trong khuôn viên."
+                    : current === "boundary"
+                      ? "Thiết lập ranh giới theo đúng hàng rào thực tế của trường."
+                      : current === "people"
+                        ? "Cấp tài khoản và quản lý quyền truy cập của người dùng."
+                        : current === "alerts"
+                          ? "Theo dõi sự kiện và báo cáo của người dùng."
+                          : "Chủ động chia sẻ và kiểm tra vị trí của bạn."}
               </p>
             </div>
             <Space>
@@ -760,6 +742,22 @@ function Screen() {
             </div>
           ) : (
             <>
+              {current === "history" && (
+                <>
+                  <HistoryPanel me={me} people={people} />
+                  {admin && !campus?.polygon.length && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      title="Chưa lưu ranh giới trường"
+                      description="Vào Khuôn viên trường để vẽ ranh giới. Các mẫu trước khi có ranh giới vẫn được lưu nhưng chưa được phân loại trong/ngoài."
+                      action={
+                        <Button onClick={openBoundary}>Vẽ ranh giới</Button>
+                      }
+                    />
+                  )}
+                </>
+              )}
               {(current === "overview" || current === "boundary") &&
                 !campus?.polygon.length && (
                   <Alert
@@ -1137,38 +1135,17 @@ function Screen() {
                   )}
                   <div className="panel-heading">
                     <div>
-                      <h2>Lịch sử cảnh báo</h2>
+                      <h2>Sự kiện và báo cáo</h2>
                       <p>
                         {activeAlerts.length} cảnh báo đang hoạt động ·{" "}
                         {state.alerts.length} sự kiện gần nhất
                       </p>
                     </div>
-                    {admin && (
-                      <Button
-                        icon={<BellOutlined />}
-                        onClick={async () => {
-                          try {
-                            await enableBrowserPush();
-                            notificationsOn.current = true;
-                            message.success(
-                              "Đã bật thông báo cho thiết bị này, kể cả khi đóng trang.",
-                            );
-                          } catch (e) {
-                            message.error((e as Error).message);
-                          }
-                        }}
-                      >
-                        Nhận thông báo trên thiết bị
-                      </Button>
-                    )}
                   </div>
-                  {admin && (
-                    <div className="inline-note">
-                      Cảnh báo được lưu trên máy chủ và gửi tới thiết bị đã bật
-                      thông báo. Trên iPhone, thêm website vào Màn hình chính
-                      rồi bật thông báo trong ứng dụng đó.
-                    </div>
-                  )}
+                  <div className="inline-note">
+                    Hệ thống lưu sự kiện để xem lại và phân tích; không gửi
+                    thông báo đẩy.
+                  </div>
                   {alertCards(state.alerts)}
                 </section>
               )}
@@ -1178,7 +1155,7 @@ function Screen() {
                     showIcon
                     type="warning"
                     title="Giới hạn của phiên bản web"
-                    description="Giữ trang mở để gửi vị trí, mục tiêu mỗi 20 giây. Khóa màn hình hoặc chuyển ứng dụng có thể dừng cập nhật. Muốn định vị nền ổn định cần bổ sung ứng dụng Android/iOS."
+                    description="Giữ trang mở để gửi vị trí, mục tiêu mỗi 60 giây. Khóa màn hình hoặc chuyển ứng dụng có thể dừng cập nhật. Muốn định vị nền ổn định cần bổ sung ứng dụng Android/iOS."
                     style={{ marginBottom: 22 }}
                   />
                   <div className="personal-grid">

@@ -112,14 +112,19 @@ export function classify(
     return "uncertain";
   return inside(reading, polygon) ? "inside" : "outside";
 }
-export type Candidate = { since: number; last: number; count: number };
+export type Candidate = {
+  since: number;
+  last: number;
+  count: number;
+  firstReading?: Reading;
+};
 export function advanceOutside(
   previous: Candidate | null,
   time: number,
   policy: Policy,
 ) {
   const candidate =
-    previous && time > previous.last && time - previous.last <= 90000
+    previous && time > previous.last && time - previous.last <= 130000
       ? { ...previous, last: time, count: previous.count + 1 }
       : { since: time, last: time, count: 1 };
   return {

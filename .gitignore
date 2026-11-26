@@ -4,3 +4,6 @@ data/
 .env*
 !.env.example
 *.tsbuildinfo
+
+# Local UI verification images
+artifacts/

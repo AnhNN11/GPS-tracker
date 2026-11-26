@@ -6,6 +6,9 @@ import type {
   Campus,
   RuntimeRow,
   PushDevice,
+  LocationSample,
+  BoundaryVersion,
+  Excursion,
 } from "./models";
 nextEnv.loadEnvConfig(process.cwd());
 type SessionRow = {
@@ -39,6 +42,25 @@ async function connect() {
         .collection("users")
         .createIndex({ enabled: 1, tracking: 1, "reading.capturedAt": 1 }),
       db.collection("runtime").createIndex({ key: 1 }, { unique: true }),
+      db
+        .collection("location_samples")
+        .createIndex({ user_id: 1, capturedAt: 1 }, { unique: true }),
+      db.collection("location_samples").createIndex({ capturedAt: -1 }),
+      db
+        .collection("location_samples")
+        .createIndex({ trackingSession: 1, capturedAt: 1 }),
+      db
+        .collection("boundary_versions")
+        .createIndex({ id: 1 }, { unique: true }),
+      db.collection("excursions").createIndex({ id: 1 }, { unique: true }),
+      db
+        .collection("excursions")
+        .createIndex(
+          { user_id: 1 },
+          { unique: true, partialFilterExpression: { active: true } },
+        ),
+      db.collection("excursions").createIndex({ startedAt: -1 }),
+      db.collection("excursions").createIndex({ user_id: 1, startedAt: -1 }),
       db
         .collection("push_devices")
         .createIndex({ endpoint: 1 }, { unique: true }),
@@ -86,6 +108,9 @@ export async function collections() {
     limits: db.collection<LimitRow>("login_limits"),
     runtime: db.collection<RuntimeRow>("runtime"),
     pushDevices: db.collection<PushDevice>("push_devices"),
+    samples: db.collection<LocationSample>("location_samples"),
+    boundaryVersions: db.collection<BoundaryVersion>("boundary_versions"),
+    excursions: db.collection<Excursion>("excursions"),
   };
 }
 export async function transaction<T>(

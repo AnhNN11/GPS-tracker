@@ -249,12 +249,94 @@ try {
   ).json();
   assert.equal(state.users.length, 2);
   const memberId = own.me.id;
+  const { acceptReading } = await import("../src/lib/store");
+  const { dayInVietnam } = await import("../src/lib/history");
+  const now = Date.now() + 1000;
+  await acceptReading(
+    memberId,
+    { lat: 14.001, lng: 108.004, accuracy: 5, capturedAt: now },
+    now,
+  );
+  await acceptReading(
+    memberId,
+    { lat: 14.001, lng: 108.004, accuracy: 5, capturedAt: now + 60000 },
+    now + 60000,
+  );
+  await acceptReading(
+    memberId,
+    { lat: 14.001, lng: 108.001, accuracy: 5, capturedAt: now + 120000 },
+    now + 120000,
+  );
+  const dates =
+    "from=" +
+    dayInVietnam(now - 86400000) +
+    "&to=" +
+    dayInVietnam(now + 86400000);
+  const historyResponse = await request(
+    "history?view=samples&" + dates,
+    "GET",
+    undefined,
+    memberCookie,
+  );
+  assert.equal(historyResponse.status, 200);
+  assert.equal(historyResponse.headers.get("cache-control"), "no-store");
+  const history = await historyResponse.json();
+  assert.equal(history.total, 4);
+  assert.equal(history.summary.outsideSamples, 2);
+  assert.equal(
+    (
+      await request(
+        "history?userId=" +
+          state.users.find((u: { role: string }) => u.role === "admin").id,
+        "GET",
+        undefined,
+        memberCookie,
+      )
+    ).status,
+    403,
+  );
+  const events = await (
+    await request(
+      "history?view=events&" + dates,
+      "GET",
+      undefined,
+      memberCookie,
+    )
+  ).json();
+  assert.equal(events.total, 1);
+  assert.equal(events.rows[0].endReason, "returned");
+  const detail = await (
+    await request(
+      "history/events/" + events.rows[0].id,
+      "GET",
+      undefined,
+      memberCookie,
+    )
+  ).json();
+  assert.ok(detail.points.length >= 3);
+  assert.deepEqual(detail.boundary.polygon, boundary.polygon);
+  const csv = await request(
+    "history?view=samples&format=csv&" + dates,
+    "GET",
+    undefined,
+    adminCookie,
+  );
+  assert.equal(csv.status, 200);
+  assert.match(csv.headers.get("content-type") ?? "", /text\/csv/);
+  assert.ok((await csv.text()).includes("UTC+7"));
+  assert.equal(
+    (await request("history?from=2026-02-30", "GET", undefined, adminCookie))
+      .status,
+    400,
+  );
+
   const staleTime = Date.now() - 10 * 60000;
   await c.users.updateOne(
     { id: memberId },
     {
       $set: {
         reading: { lat: 14, lng: 108, accuracy: 5, capturedAt: staleTime },
+        tracking_started: staleTime,
       },
     },
   );
@@ -278,7 +360,9 @@ try {
   const alertState = await (
     await request("state", "GET", undefined, memberCookie)
   ).json();
-  const alert = alertState.alerts[0];
+  const alert = alertState.alerts.find(
+    (item: { type: string }) => item.type === "stale",
+  );
   assert.equal(alert.type, "stale");
   assert.equal(
     (await request(`alerts/${alert.id}/ack`, "POST", {}, memberCookie)).status,
@@ -331,7 +415,7 @@ try {
     401,
   );
   console.log(
-    "API checks passed: authentication, cookie, CSRF, roles, account locking, campus validation, consent, GPS, reports, acknowledgement and session revocation.",
+    "API checks passed: authentication, cookie, CSRF, roles, account locking, campus validation, consent, GPS history, event details, CSV, history isolation, reports, acknowledgement and session revocation.",
   );
   if (process.argv.includes("--preview")) {
     console.log("Isolated QA preview: " + origin);

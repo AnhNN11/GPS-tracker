@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ClientSession } from "mongodb";
 import { collections, transaction } from "./db";
 import { publicUser, type UserRow } from "./auth";
+import { ensureBoundary, closeExcursion, recordHistory } from "./history-store";
 import {
   advanceOutside,
   classify,
@@ -14,7 +15,7 @@ export type { Campus } from "./models";
 type Collections = Awaited<ReturnType<typeof collections>>;
 export const initialCampus: Campus = {
   name: "Phân hiệu 1 Trường Thiếu sinh quân miền Trung",
-  address: "Phường Thống Nhất, Pleiku, Gia Lai",
+  address: "534 Phạm Văn Đồng, phường Thống Nhất, tỉnh Gia Lai",
   polygon: [],
   policy: defaultPolicy,
 };
@@ -30,6 +31,18 @@ export async function campus(
 }
 export async function saveCampus(value: Campus) {
   await transaction(async (c, session) => {
+    await ensureBoundary(c, session, value);
+    await c.excursions.updateMany(
+      { active: true },
+      {
+        $set: {
+          active: false,
+          endReason: "boundary_changed",
+          closedAt: Date.now(),
+        },
+      },
+      { session },
+    );
     await c.settings.updateOne(
       { key: "campus" },
       { $set: { value } },
@@ -110,15 +123,40 @@ export async function acceptReading(
         reading.capturedAt,
         config.policy,
       );
-      candidate = next.candidate;
+      candidate = {
+        ...next.candidate,
+        firstReading:
+          next.candidate.count > 1
+            ? (user.candidate?.firstReading ?? reading)
+            : reading,
+      };
       displayed = next.confirmed ? "outside" : "pending";
       if (next.confirmed) await openAlert(c, session, user.id, "outside", now);
     }
     if (status === "inside") await resolveAlert(c, session, user.id, "outside");
     await resolveAlert(c, session, user.id, "stale");
+    const trackingSession = user.tracking_session ?? randomUUID();
+    await recordHistory(c, session, {
+      userId: user.id,
+      trackingSession,
+      campus: config,
+      reading,
+      classification: status,
+      status: displayed,
+      candidate,
+      previous: user.reading,
+      receivedAt: now,
+    });
     await c.users.updateOne(
       { id: user.id },
-      { $set: { reading, status: displayed, candidate } },
+      {
+        $set: {
+          reading,
+          status: displayed,
+          candidate,
+          tracking_session: trackingSession,
+        },
+      },
       { session },
     );
     return displayed;
@@ -126,13 +164,16 @@ export async function acceptReading(
 }
 export async function setTracking(userId: string, enabled: boolean) {
   await transaction(async (c, session) => {
+    const user = await c.users.findOne({ id: userId }, { session });
+    if (!user) return;
+    if (!!user.tracking === enabled) return;
     await c.users.updateOne(
       { id: userId },
       {
         $set: {
           tracking: enabled ? 1 : 0,
           tracking_started: enabled ? Date.now() : null,
-          reading: null,
+          tracking_session: enabled ? randomUUID() : null,
           candidate: null,
           status: "unknown",
         },
@@ -140,6 +181,7 @@ export async function setTracking(userId: string, enabled: boolean) {
       { session },
     );
     if (!enabled) {
+      await closeExcursion(c, session, userId, "sharing_stopped");
       await resolveAlert(c, session, userId, "stale");
       await resolveAlert(c, session, userId, "outside");
     }
@@ -166,6 +208,7 @@ export async function disableUser(userId: string, enabled: boolean) {
       { session },
     );
     if (!enabled) {
+      await closeExcursion(c, session, userId, "account_disabled");
       await c.sessions.deleteMany({ user_id: userId }, { session });
       await resolveAlert(c, session, userId, "stale");
       await resolveAlert(c, session, userId, "outside");
@@ -204,10 +247,15 @@ export async function sweep(now = Date.now(), budgetMs = 30000, limit = 200) {
       if (!user) return false;
       const policy = (await campus(store, session)).policy;
       if (
-        now - (user.reading?.capturedAt ?? user.tracking_started ?? now) >
+        now -
+          Math.max(
+            user.reading?.capturedAt ?? 0,
+            user.tracking_started ?? now,
+          ) >
         policy.staleMinutes * 60000
       ) {
         await openAlert(store, session, id, "stale", now);
+        await closeExcursion(store, session, id, "data_gap", now);
         await store.users.updateOne(
           { id },
           { $set: { status: "stale", candidate: null } },

@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { authorizeMonitor } from "@/lib/monitor-auth";
 import { sweep } from "@/lib/store";
 import { collections } from "@/lib/db";
-import { deliverPendingPush } from "@/lib/push";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -15,7 +14,6 @@ export async function GET(request: Request) {
     );
   try {
     const result = await sweep();
-    await deliverPendingPush().catch(() => undefined);
     await (
       await collections()
     ).runtime.updateOne(
