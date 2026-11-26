@@ -42,6 +42,7 @@ function Controls({
   fitRegion,
   editingCircle,
   fitRevision,
+  onCenterPick,
 }: {
   drawing: boolean;
   onPoint?: (p: Point) => void;
@@ -50,15 +51,23 @@ function Controls({
   fitRegion: boolean;
   editingCircle: boolean;
   fitRevision: number;
+  onCenterPick?: (p: Point) => void;
 }) {
   const map = useMap();
   const wasEditing = useRef(false),
+    hadCircle = useRef(false),
     lastFit = useRef(fitRevision);
   const region = useRef({ circle, fitRegion });
   region.current = { circle, fitRegion };
   useMapEvents({
     click(e) {
-      if (drawing) onPoint?.({ lat: e.latlng.lat, lng: e.latlng.lng });
+      const point = { lat: e.latlng.lat, lng: e.latlng.lng };
+      if (onCenterPick)
+        onCenterPick({
+          lat: Math.max(-85, Math.min(85, point.lat)),
+          lng: ((point.lng + 540) % 360) - 180,
+        });
+      else if (drawing) onPoint?.(point);
     },
   });
   useEffect(() => {
@@ -66,8 +75,12 @@ function Controls({
   }, [focus?.lat, focus?.lng, map]);
   useEffect(() => {
     const shouldFit =
-      !editingCircle || !wasEditing.current || lastFit.current !== fitRevision;
+      !editingCircle ||
+      !wasEditing.current ||
+      !hadCircle.current ||
+      lastFit.current !== fitRevision;
     wasEditing.current = editingCircle;
+    hadCircle.current = !!circle;
     lastFit.current = fitRevision;
     if (fitRegion && circle && shouldFit)
       map.fitBounds(
@@ -242,6 +255,7 @@ export default function CampusMap({
   fitRegion = false,
   onCircleChange,
   fitRevision = 0,
+  onCenterPick,
 }: {
   polygon: Point[];
   people?: Person[];
@@ -252,6 +266,7 @@ export default function CampusMap({
   fitRegion?: boolean;
   onCircleChange?: (circle: CircleRegion) => void;
   fitRevision?: number;
+  onCenterPick?: (p: Point) => void;
 }) {
   const center = focus ??
     people.find((person) => person.reading)?.reading ??
@@ -261,7 +276,7 @@ export default function CampusMap({
     <MapContainer
       center={[center.lat, center.lng]}
       zoom={polygon.length ? 17 : 14}
-      className={drawing ? "map drawing" : "map"}
+      className={drawing || onCenterPick ? "map drawing" : "map"}
       scrollWheelZoom
     >
       <TileLayer
@@ -276,6 +291,7 @@ export default function CampusMap({
         fitRegion={fitRegion}
         editingCircle={!!onCircleChange}
         fitRevision={fitRevision}
+        onCenterPick={onCenterPick}
       />
       {circle ? (
         <>

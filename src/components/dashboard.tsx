@@ -44,11 +44,7 @@ import {
 import { circlePolygon, validCircle, type Point } from "@/lib/geo";
 import { rosterCounts } from "@/lib/roster";
 import { deviceContext } from "@/lib/device-context";
-import {
-  schoolMapUrl,
-  schoolCenter,
-  schoolRadiusMeters,
-} from "@/lib/campus-preset";
+import { schoolCenter, schoolRadiusMeters } from "@/lib/campus-preset";
 import HistoryPanel from "./history-panel";
 import { useScreenAwake } from "./use-screen-awake";
 import {
@@ -161,6 +157,7 @@ function Screen() {
     [draft, setDraft] = useState<Point[]>([]),
     [boundaryMode, setBoundaryMode] = useState<"circle" | "polygon">("circle"),
     [regionFitRevision, setRegionFitRevision] = useState(0),
+    [placingCenter, setPlacingCenter] = useState(false),
     [focus, setFocus] = useState<Point | null>(null),
     [query, setQuery] = useState("");
   const [consent, setConsent] = useState(false),
@@ -519,6 +516,7 @@ function Screen() {
     },
   ];
   function openBoundary() {
+    setPlacingCenter(false);
     setDraft(campus?.polygon ?? []);
     setBoundaryMode(campus?.circle ? "circle" : "polygon");
     setFocus(null);
@@ -545,8 +543,10 @@ function Screen() {
             }),
           "Đã lưu ranh giới và cấu hình",
         )
-      )
+      ) {
         setBoundaryOpen(false);
+        setPlacingCenter(false);
+      }
     } catch {
       /* Form shows validation errors. */
     }
@@ -794,12 +794,18 @@ function Screen() {
                   description={
                     campus.boundaryNote.startsWith("Vùng tạm") ? (
                       <>
-                        Đã bật phép tính trong/ngoài theo vùng cài sẵn. Kết quả
-                        phản ánh vùng tạm này; admin có thể sửa đa giác theo
-                        khuôn viên thực tế.{" "}
-                        <a href={schoolMapUrl} target="_blank" rel="noreferrer">
-                          Xem ghim địa chỉ
-                        </a>
+                        GPS được tính trong/ngoài theo vùng đang cấu hình.
+                        Admin có thể đặt tâm ở nơi khác, đổi bán kính hoặc vẽ
+                        đa giác theo khuôn viên thực tế.{" "}
+                        {campus.circle && (
+                          <a
+                            href={`https://www.google.com/maps/search/?api=1&query=${campus.circle.center.lat},${campus.circle.center.lng}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Xem tâm vùng hiện tại
+                          </a>
+                        )}
                         .
                       </>
                     ) : undefined
@@ -995,7 +1001,9 @@ function Screen() {
                         <p>
                           {boundaryOpen
                             ? boundaryMode === "circle"
-                              ? "Kéo nút ↔ ở viền xanh để phóng to/thu nhỏ; kéo nút ✚ để dời tâm. Bấm Lưu bán kính để áp dụng."
+                              ? placingCenter
+                                ? "Chạm một điểm bất kỳ trên bản đồ để đặt tâm vùng mới. Bán kính được giữ nguyên; bấm Lưu bán kính để áp dụng."
+                                : "Đặt vùng ở bất kỳ đâu: di chuyển bản đồ, bấm Đặt tâm trên bản đồ rồi chạm nơi muốn chọn. Kéo ✚ để dời tâm, ↔ để đổi bán kính; bấm Lưu bán kính để áp dụng."
                               : "Nhấp lần lượt các góc theo hàng rào. Đường cuối sẽ tự nối về điểm đầu."
                             : (campus?.boundaryNote ??
                               "Ranh giới do quản trị viên thiết lập.")}
@@ -1019,6 +1027,20 @@ function Screen() {
                           : undefined
                       }
                       fitRevision={regionFitRevision}
+                      onCenterPick={
+                        boundaryOpen &&
+                        boundaryMode === "circle" &&
+                        placingCenter &&
+                        previewCircle
+                          ? (point) => {
+                              campusForm.setFieldsValue({
+                                circle: { ...previewCircle, center: point },
+                              });
+                              setPlacingCenter(false);
+                              setRegionFitRevision((value) => value + 1);
+                            }
+                          : undefined
+                      }
                       fitRegion
                       drawing={boundaryOpen && boundaryMode === "polygon"}
                       onPoint={(p) => setDraft((d) => [...d, p])}
@@ -1035,14 +1057,26 @@ function Screen() {
                         </Button>
                       )}
                       {boundaryOpen && boundaryMode === "circle" && (
-                        <Button
-                          type="primary"
-                          loading={busy}
-                          disabled={!previewCircle}
-                          onClick={saveBoundary}
-                        >
-                          Lưu bán kính
-                        </Button>
+                        <>
+                          <Button
+                            type={placingCenter ? "primary" : "default"}
+                            aria-pressed={placingCenter}
+                            disabled={!previewCircle || busy}
+                            onClick={() => setPlacingCenter((value) => !value)}
+                          >
+                            {placingCenter
+                              ? "Hủy chọn tâm"
+                              : "Đặt tâm trên bản đồ"}
+                          </Button>
+                          <Button
+                            type="primary"
+                            loading={busy}
+                            disabled={!previewCircle}
+                            onClick={saveBoundary}
+                          >
+                            Lưu bán kính
+                          </Button>
+                        </>
                       )}
                       <Button
                         icon={<AimOutlined />}
@@ -1097,7 +1131,10 @@ function Screen() {
                             <Select
                               aria-label="Cách xác định vùng"
                               value={boundaryMode}
-                              onChange={setBoundaryMode}
+                              onChange={(mode) => {
+                                setBoundaryMode(mode);
+                                setPlacingCenter(false);
+                              }}
                               options={[
                                 { value: "circle", label: "Tâm và bán kính" },
                                 {

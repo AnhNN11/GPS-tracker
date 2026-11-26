@@ -122,16 +122,23 @@ try {
   assert.ok(presetState.campus.boundaryNote.includes("chưa xác minh"));
   const circleInput = {
     ...presetState.campus,
-    circle: { ...presetState.campus.circle, radiusMeters: 500 },
+    circle: { center: { lat: 10.7769, lng: 106.7009 }, radiusMeters: 500 },
   };
   assert.equal(
     (await request("campus", "PUT", circleInput, adminCookie)).status,
     200,
   );
-  assert.equal(
-    (await (await request("state", "GET", undefined, adminCookie)).json())
-      .campus.circle.radiusMeters,
-    500,
+  const relocatedCampus = (
+    await (await request("state", "GET", undefined, adminCookie)).json()
+  ).campus;
+  assert.deepEqual(relocatedCampus.circle, circleInput.circle);
+  assert.ok(
+    relocatedCampus.polygon.every(
+      (point: { lat: number; lng: number }) =>
+        Math.abs(point.lat - circleInput.circle.center.lat) < 0.01 &&
+        Math.abs(point.lng - circleInput.circle.center.lng) < 0.01,
+    ),
+    "Map boundary must move with the configured center instead of the school pin",
   );
   for (const radiusMeters of [0, 49, 3001]) {
     assert.equal(
