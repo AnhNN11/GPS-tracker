@@ -1315,7 +1315,10 @@ footer > span:last-child {
   min-width: 205px;
   max-width: 270px;
   color: #142c24;
-  font: 12px/1.4 Arial, Helvetica, sans-serif;
+  font:
+    12px/1.4 Arial,
+    Helvetica,
+    sans-serif;
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -1327,6 +1330,100 @@ footer > span:last-child {
   border: 1px solid #9db9aa;
   border-radius: 10px;
   box-shadow: 0 3px 16px #142c2426;
+}
+.map-person-marker {
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  border-radius: 50%;
+}
+.map-person-dot {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 5px #142c2460;
+  pointer-events: none;
+}
+.map-person-marker:focus-visible,
+.gps-help > summary:focus-visible {
+  outline: 3px solid #1557b0;
+  outline-offset: 3px;
+}
+.gps-help {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid #d5e2da;
+}
+.gps-help > summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 10px 0;
+}
+.gps-help .ant-alert {
+  margin-top: 12px;
+}
+.draft-status.ant-tag {
+  display: inline-block;
+  margin: 8px 0;
+}
+@media (max-width: 760px) {
+  .ant-table-thead > tr > th {
+    font-size: 12px !important;
+  }
+  .ant-table-tbody > tr > td {
+    font-size: 14px !important;
+  }
+  .person strong {
+    font-size: 14px;
+  }
+  .person small {
+    font-size: 12px;
+  }
+  input.ant-input,
+  .ant-input-affix-wrapper,
+  .ant-input-number-input,
+  .ant-select,
+  .ant-select input,
+  .ant-select-content {
+    font-size: 16px !important;
+  }
+  .ant-btn,
+  input.ant-input,
+  .ant-input-affix-wrapper,
+  .ant-input-number,
+  .ant-select {
+    min-height: 44px;
+  }
+  .ant-input-affix-wrapper > input.ant-input {
+    min-height: 0;
+  }
+  .ant-input-number-input {
+    height: 42px;
+  }
+  .sidebar nav button {
+    min-height: 44px;
+    font-size: 14px;
+  }
+  .personal-pin {
+    display: none;
+  }
+  .personal-card {
+    padding: 20px;
+  }
+  .personal-card h2 {
+    margin-top: 0;
+  }
+  .personal-card .ant-checkbox-wrapper {
+    min-height: 44px;
+    font-size: 14px;
+  }
+  .personal-card .ant-alert-description {
+    font-size: 14px !important;
+  }
 }
 .history-summary > div:nth-child(2) strong {
   color: #ac2020;

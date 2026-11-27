@@ -298,7 +298,9 @@ try {
     await request("state", "GET", undefined, adminCookie)
   ).json();
   assert.equal(state.users.length, 2);
-  const adminMapPerson = state.users.find((person: { id: string }) => person.id === own.me.id);
+  const adminMapPerson = state.users.find(
+    (person: { id: string }) => person.id === own.me.id,
+  );
   assert.deepEqual(adminMapPerson.reading, postedReading);
   assert.equal(adminMapPerson.lastReceivedAt, receipt.receivedAt);
   const memberId = own.me.id;
@@ -392,6 +394,13 @@ try {
   ).json();
   assert.ok(detail.points.length >= 3);
   assert.deepEqual(detail.boundary.polygon, boundary.polygon);
+  assert.ok(Array.isArray(detail.segments));
+  assert.ok(Array.isArray(detail.breaks));
+  assert.ok(
+    detail.segments
+      .flat()
+      .every((index: number) => index >= 0 && index < detail.points.length),
+  );
   const csv = await request(
     "history?view=samples&format=csv&" + dates,
     "GET",
@@ -497,8 +506,9 @@ try {
   if (process.argv.includes("--preview")) {
     const { createUser } = await import("../src/lib/auth");
     const { saveCampus, setTracking } = await import("../src/lib/store");
-    const { schoolPreset, schoolCenter } =
-      await import("../src/lib/campus-preset");
+    const { schoolPreset, schoolCenter } = await import(
+      "../src/lib/campus-preset"
+    );
     await saveCampus(schoolPreset);
     for (let index = 1; index <= 3; index++) {
       const id = await createUser(

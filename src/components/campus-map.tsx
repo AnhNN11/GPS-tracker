@@ -33,7 +33,11 @@ const mapTime = (value: number | null | undefined) =>
   value
     ? new Date(value).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })
     : "Chưa có thời điểm nhận";
-function PersonDetails({ person, now, staleMinutes }: {
+function PersonDetails({
+  person,
+  now,
+  staleMinutes,
+}: {
   person: Person;
   now: number;
   staleMinutes: number;
@@ -47,19 +51,31 @@ function PersonDetails({ person, now, staleMinutes }: {
       <span>GPS ghi: {mapTime(person.reading!.capturedAt)}</span>
       <span>Máy chủ nhận: {mapTime(person.lastReceivedAt)}</span>
       <span>Sai số: ±{Math.round(person.reading!.accuracy)} m</span>
-      <span>Tọa độ: {person.reading!.lat.toFixed(6)}, {person.reading!.lng.toFixed(6)}</span>
+      <span>
+        Tọa độ: {person.reading!.lat.toFixed(6)},{" "}
+        {person.reading!.lng.toFixed(6)}
+      </span>
     </div>
   );
 }
-function fitPeopleBounds(map: LeafletMap, people: Person[], circle?: CircleRegion) {
-  const points = people.filter((p) => p.reading).map(
-    (p) => [p.reading!.lat, p.reading!.lng] as [number, number],
-  );
+function regionPoints(polygon: Point[], circle?: CircleRegion) {
+  return circle ? circlePolygon(circle) : polygon;
+}
+function fitPeopleBounds(
+  map: LeafletMap,
+  people: Person[],
+  polygon: Point[],
+  circle?: CircleRegion,
+) {
+  const points = people
+    .filter((p) => p.reading)
+    .map((p) => [p.reading!.lat, p.reading!.lng] as [number, number]);
   if (!points.length) return;
-  if (circle)
-    points.push(...circlePolygon(circle).map(
+  points.push(
+    ...regionPoints(polygon, circle).map(
       (p) => [p.lat, p.lng] as [number, number],
-    ));
+    ),
+  );
   map.fitBounds(points, { padding: [40, 40], maxZoom: 17, animate: false });
 }
 function Controls({
@@ -67,8 +83,9 @@ function Controls({
   onPoint,
   focus,
   circle,
+  polygon,
   fitRegion,
-  editingCircle,
+  editing,
   fitRevision,
   onCenterPick,
   people,
@@ -78,8 +95,9 @@ function Controls({
   onPoint?: (p: Point) => void;
   focus: Point | null;
   circle?: CircleRegion;
+  polygon: Point[];
   fitRegion: boolean;
-  editingCircle: boolean;
+  editing: boolean;
   fitRevision: number;
   onCenterPick?: (p: Point) => void;
   people: Person[];
@@ -87,13 +105,32 @@ function Controls({
 }) {
   const map = useMap();
   const wasEditing = useRef(false),
-    hadCircle = useRef(false),
+    hadRegion = useRef(false),
     lastFit = useRef(fitRevision);
-  const region = useRef({ circle, fitRegion });
-  region.current = { circle, fitRegion };
-  const peopleRegion = useRef({ people, circle, fitPeople, focus });
-  peopleRegion.current = { people, circle, fitPeople, focus };
-  const peopleKey = people.filter((p) => p.reading).map((p) => p.id).sort().join(",");
+  const current = useRef({
+    circle,
+    polygon,
+    fitRegion,
+    editing,
+    people,
+    fitPeople,
+    focus,
+  });
+  current.current = {
+    circle,
+    polygon,
+    fitRegion,
+    editing,
+    people,
+    fitPeople,
+    focus,
+  };
+  const peopleKey = people
+    .filter((p) => p.reading)
+    .map((p) => p.id)
+    .sort()
+    .join(",");
+  const boundaryKey = JSON.stringify(regionPoints(polygon, circle));
   useMapEvents({
     click(e) {
       const point = { lat: e.latlng.lat, lng: e.latlng.lng };
@@ -110,47 +147,45 @@ function Controls({
   }, [focus?.lat, focus?.lng, map]);
   useEffect(() => {
     if (!fitPeople || focus) return;
-    const current = peopleRegion.current;
-    fitPeopleBounds(map, current.people, current.circle);
+    const value = current.current;
+    fitPeopleBounds(map, value.people, value.polygon, value.circle);
   }, [fitPeople, peopleKey, fitRevision, focus, map]);
   useEffect(() => {
+    const points = regionPoints(
+      current.current.polygon,
+      current.current.circle,
+    );
     const shouldFit =
-      !editingCircle ||
+      !editing ||
       !wasEditing.current ||
-      !hadCircle.current ||
+      (!hadRegion.current && !drawing) ||
       lastFit.current !== fitRevision;
-    wasEditing.current = editingCircle;
-    hadCircle.current = !!circle;
+    wasEditing.current = editing;
+    hadRegion.current = points.length >= 3;
     lastFit.current = fitRevision;
-    if (fitRegion && circle && shouldFit)
+    if (fitRegion && points.length >= 3 && shouldFit) {
+      map.invalidateSize({ pan: false });
       map.fitBounds(
-        circlePolygon(circle).map((p) => [p.lat, p.lng] as [number, number]),
-        { padding: [25, 25], maxZoom: 18 },
+        points.map((p) => [p.lat, p.lng] as [number, number]),
+        { padding: [30, 30], maxZoom: 18, animate: false },
       );
-  }, [
-    fitRegion,
-    editingCircle,
-    fitRevision,
-    circle?.center.lat,
-    circle?.center.lng,
-    circle?.radiusMeters,
-    map,
-  ]);
+    }
+  }, [fitRegion, editing, drawing, fitRevision, boundaryKey, map]);
   useEffect(() => {
     const resize = () => {
-      map.invalidateSize();
-      const current = region.current;
-      if (current.fitRegion && current.circle)
+      map.invalidateSize({ pan: false });
+      const value = current.current;
+      const points = regionPoints(value.polygon, value.circle);
+      if (value.fitRegion && !value.editing && points.length >= 3)
         map.fitBounds(
-          circlePolygon(current.circle).map(
-            (p) => [p.lat, p.lng] as [number, number],
-          ),
-          { padding: [25, 25], maxZoom: 18, animate: false },
+          points.map((p) => [p.lat, p.lng] as [number, number]),
+          { padding: [30, 30], maxZoom: 18, animate: false },
         );
-      else if (peopleRegion.current.fitPeople && !peopleRegion.current.focus)
-        fitPeopleBounds(map, peopleRegion.current.people, peopleRegion.current.circle);
+      else if (value.fitPeople && !value.focus)
+        fitPeopleBounds(map, value.people, value.polygon, value.circle);
     };
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
     observer?.observe(map.getContainer());
     window.addEventListener("resize", resize);
     resize();
@@ -160,6 +195,94 @@ function Controls({
     };
   }, [map]);
   return null;
+}
+function PersonMarker({
+  person,
+  now,
+  staleMinutes,
+}: {
+  person: Person;
+  now: number;
+  staleMinutes: number;
+}) {
+  const presence = mapPresence(person, now, staleMinutes);
+  const marker = useRef<LeafletMarker | null>(null);
+  const label = `${person.name}: ${presence.label}`;
+  const icon = useMemo(
+    () =>
+      divIcon({
+        className: "map-person-marker",
+        html: `<span class="map-person-dot" style="background:${presence.color}" aria-hidden="true"></span>`,
+        iconSize: [44, 44],
+        iconAnchor: [22, 22],
+        popupAnchor: [0, -14],
+        tooltipAnchor: [0, -18],
+      }),
+    [presence.color],
+  );
+  useEffect(() => {
+    const target = marker.current;
+    const element = target?.getElement();
+    if (!element || !target) return;
+    element.setAttribute("role", "button");
+    element.setAttribute("aria-label", label);
+    element.tabIndex = 0;
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        event.stopPropagation();
+        target.closeTooltip();
+        target.openPopup();
+      } else if (event.key === "Escape") target.closePopup();
+    };
+    const focus = () => {
+      target.openTooltip();
+    };
+    const blur = () => {
+      target.closeTooltip();
+    };
+    element.addEventListener("keydown", keydown);
+    element.addEventListener("focus", focus);
+    element.addEventListener("blur", blur);
+    return () => {
+      element.removeEventListener("keydown", keydown);
+      element.removeEventListener("focus", focus);
+      element.removeEventListener("blur", blur);
+    };
+  }, [label, icon]);
+  const reading = person.reading!;
+  return (
+    <>
+      <Circle
+        center={[reading.lat, reading.lng]}
+        radius={reading.accuracy}
+        interactive={false}
+        pathOptions={{ color: presence.color, fillOpacity: 0.1, weight: 1 }}
+      />
+      <Marker
+        ref={marker}
+        position={[reading.lat, reading.lng]}
+        icon={icon}
+        title={label}
+        alt={label}
+      >
+        <Tooltip direction="top" className="person-map-tooltip">
+          <PersonDetails
+            person={person}
+            now={now}
+            staleMinutes={staleMinutes}
+          />
+        </Tooltip>
+        <Popup>
+          <PersonDetails
+            person={person}
+            now={now}
+            staleMinutes={staleMinutes}
+          />
+        </Popup>
+      </Marker>
+    </>
+  );
 }
 function CircleEditor({
   circle,
@@ -343,7 +466,8 @@ export default function CampusMap({
         focus={focus}
         circle={circle}
         fitRegion={fitRegion}
-        editingCircle={!!onCircleChange}
+        editing={drawing || !!onCircleChange}
+        polygon={polygon}
         fitRevision={fitRevision}
         onCenterPick={onCenterPick}
         people={people}
@@ -400,41 +524,15 @@ export default function CampusMap({
           </CircleMarker>
         ))}
       {people
-        .filter((p) => p.reading)
-        .map((p) => {
-          const presence = mapPresence(p, now, staleMinutes);
-          return (
-            <Circle
-              key={p.id}
-              interactive={false}
-              center={[p.reading!.lat, p.reading!.lng]}
-              radius={p.reading!.accuracy}
-              pathOptions={{
-                color: presence.color,
-                fillOpacity: 0.1,
-                weight: 1,
-              }}
-            >
-              <CircleMarker
-                center={[p.reading!.lat, p.reading!.lng]}
-                radius={9}
-                pathOptions={{
-                  color: "#fff",
-                  weight: 2,
-                  fillColor: presence.color,
-                  fillOpacity: 1,
-                }}
-              >
-                <Tooltip direction="top" offset={[0, -8]} className="person-map-tooltip">
-                  <PersonDetails person={p} now={now} staleMinutes={staleMinutes} />
-                </Tooltip>
-                <Popup>
-                  <PersonDetails person={p} now={now} staleMinutes={staleMinutes} />
-                </Popup>
-              </CircleMarker>
-            </Circle>
-          );
-        })}
+        .filter((person) => person.reading)
+        .map((person) => (
+          <PersonMarker
+            key={person.id}
+            person={person}
+            now={now}
+            staleMinutes={staleMinutes}
+          />
+        ))}
     </MapContainer>
   );
 }

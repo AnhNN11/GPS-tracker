@@ -21,7 +21,8 @@ import {
   EnvironmentOutlined,
 } from "@ant-design/icons";
 import type { Person } from "@/lib/types";
-import type { LocationSample, Excursion, Campus } from "@/lib/models";
+import type { LocationSample, Excursion } from "@/lib/models";
+import type { ExcursionDetail } from "@/lib/history";
 import JourneyTool from "./journey-tool";
 import { withRequestTimeout } from "@/lib/request-timeout";
 const HistoryMap = dynamic(() => import("./history-map"), {
@@ -45,12 +46,7 @@ type Result = {
     events: number;
   };
 };
-type Detail = {
-  event: EventRow;
-  points: LocationSample[];
-  boundary: Campus | null;
-  truncated: boolean;
-};
+type Detail = ExcursionDetail;
 const localDay = (time = Date.now()) =>
   new Date(time + 7 * 3600000).toISOString().slice(0, 10);
 const timestamp = (time: number | null) =>
@@ -202,9 +198,9 @@ export default function HistoryPanel({
     try {
       const result = await withRequestTimeout(async (signal) => {
         const response = await fetch(
-          "/api/history/events/" + encodeURIComponent(id),
-          { cache: "no-store", signal },
-        ),
+            "/api/history/events/" + encodeURIComponent(id),
+            { cache: "no-store", signal },
+          ),
           result = await response.json();
         if (!response.ok) throw new Error(result.error);
         return result;
@@ -562,7 +558,25 @@ export default function HistoryPanel({
                   title="Bản đồ hiển thị tối đa 2.000 mẫu. Dùng CSV với khoảng ngày nhỏ hơn để xem dữ liệu đầy đủ."
                 />
               )}
-              <HistoryMap points={detail.points} boundary={detail.boundary} />
+              <HistoryMap
+                points={detail.points}
+                boundary={detail.boundary}
+                segments={detail.segments}
+              />
+              {!!detail.breaks.length && (
+                <details className="gps-help">
+                  <summary>{detail.breaks.length} đoạn không nối đường</summary>
+                  <ul>
+                    {detail.breaks.slice(0, 50).map((gap, index) => (
+                      <li key={index}>
+                        {timestamp(detail.points[gap.from].capturedAt)} →{" "}
+                        {timestamp(detail.points[gap.to].capturedAt)}:{" "}
+                        {gap.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
               {detail.boundary?.boundaryNote && (
                 <Alert
                   type="info"

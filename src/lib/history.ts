@@ -1,6 +1,7 @@
 import type { Filter } from "mongodb";
 import { collections } from "./db";
 import type { UserRow, LocationSample, Excursion } from "./models";
+import { analyseJourney } from "./journey-analysis";
 export type HistoryQuery = {
   from: string;
   to: string;
@@ -182,6 +183,14 @@ export async function excursionDetail(user: UserRow, id: string) {
         user_id: event.user_id,
         trackingSession: event.trackingSession,
         campusVersion: event.campusVersion,
+        ...(event.deviceId
+          ? { deviceId: event.deviceId }
+          : {
+              $or: [
+                { deviceId: { $exists: false } },
+                { deviceId: { $type: "null" } },
+              ],
+            }),
         capturedAt: { $gte: event.startedAt - 60000, $lte: end + 60000 },
       },
       { projection: { _id: 0 } },
@@ -197,13 +206,21 @@ export async function excursionDetail(user: UserRow, id: string) {
     { id: event.user_id },
     { projection: { name: 1 } },
   );
+  const visiblePoints = points.slice(0, 2000);
+  const { segments, breaks } = analyseJourney(
+    visiblePoints,
+    boundary ? [boundary] : [],
+  );
   return {
     event: { ...event, user_name: person?.name ?? "Người dùng" },
-    points: points.slice(0, 2000),
+    points: visiblePoints,
+    segments,
+    breaks,
     truncated: points.length > 2000,
     boundary: boundary?.campus ?? null,
   };
 }
+export type ExcursionDetail = Awaited<ReturnType<typeof excursionDetail>>;
 export function csvCell(value: unknown) {
   if (value === null || value === undefined) return '""';
   if (typeof value === "number")

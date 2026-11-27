@@ -40,11 +40,17 @@ Lịch sử chỉ bắt đầu từ khi triển khai bản này; không thể kh
 
 ## Phản hồi cập nhật GPS
 
+Chi tiết lượt đi (`GET /api/history/events/:id`) chỉ lấy mẫu cùng thiết bị với lượt đó; dữ liệu legacy không có mã thiết bị được giữ riêng. Phản hồi bổ sung `segments` (các nhóm chỉ số trong `points`) và `breaks` (chỉ số hai đầu cùng lý do ngắt). Cả hai bản đồ hành trình dùng chung thuật toán chia đoạn, không nối qua thời gian gián đoạn, sai số lớn hay bước nhảy bất thường.
+
+Dashboard chỉ chạy một yêu cầu trạng thái tại một thời điểm: tick 15 giây không loại bỏ phản hồi đang chờ. Sau ghi GPS/lưu cấu hình, phản hồi cũ được bỏ qua và gộp một lượt tải mới; đổi phiên đăng nhập ngăn dữ liệu của tài khoản cũ quay lại giao diện. Trên điện thoại, nút bật/cập nhật GPS nằm trước các hướng dẫn mở rộng; các ô nhập dùng chữ 16 px và vùng bấm chính từ 44 px. Điểm GPS có vùng bấm 44 px, hỗ trợ Enter/Space mở thông tin và Escape đóng.
+
 Đăng nhập không tự bật chia sẻ; giao diện nhắc rõ khi chưa bật. Khi đã bật, trang thử gửi GPS ngay và khoảng mỗi 60 giây; dashboard lấy trạng thái mỗi 15 giây và ngay khi quay lại trang/có mạng. Bản đồ tổng quan tự căn các điểm khi có người gửi mẫu đầu tiên, có nút **Xem tất cả vị trí**. Rê chuột hoặc chạm điểm để xem tên, email, trạng thái, tọa độ, sai số, giờ GPS ghi và giờ máy chủ nhận. Điểm cũ/mất cập nhật/dừng chia sẻ vẫn hiện là vị trí cuối với màu tương ứng, không coi là vị trí hiện tại.
 
 Trang Vị trí của tôi hiển thị riêng đang lấy GPS, đang gửi, đã lưu trên máy chủ hoặc lỗi. API trả lại mẫu và thời điểm nhận; giao diện cập nhật ngay từ phản hồi này, hiển thị giây và tự đưa bản đồ đến điểm mới. Nút **Cập nhật GPS ngay** lấy mẫu mới mà không phải chờ 60 giây. Nếu GPS chính xác cao thất bại, thử lại chế độ thường; sai số thực tế vẫn được lưu và mẫu quá kém vẫn được phân loại chưa rõ. Từ chối quyền không tự động thử vượt quyền. Khi quay lại trang hoặc có mạng trở lại, thử gửi mẫu mới. Không thay thời điểm GPS bằng giờ máy chủ hay giả lập vị trí thiết bị.
 
 ## Chỉnh bán kính
+
+Khi thay đổi tâm, bán kính, đa giác hoặc thông tin cấu hình, giao diện đánh dấu **Chưa lưu**. Chuyển mục/đăng xuất yêu cầu chọn **Tiếp tục chỉnh sửa** hoặc **Bỏ thay đổi**; nút Hủy là thao tác bỏ nháp rõ ràng. Có cảnh báo rời trang qua `beforeunload` khi trình duyệt cho phép. **Xem toàn vùng** hỗ trợ cả đa giác và hình tròn; không tự căn lại trong lúc đang vẽ/kéo.
 
 Vùng quản lý đặt được ở nơi bất kỳ; tọa độ trường chỉ là cấu hình ban đầu. Trong chế độ chỉnh hình tròn, di chuyển/thu nhỏ bản đồ đến nơi cần đặt, bấm **Đặt tâm trên bản đồ** rồi chạm một điểm. Tâm chuyển đến điểm đó và giữ nguyên bán kính; có thể kéo ✚ hoặc nhập tọa độ để chỉnh tiếp. Bấm **Lưu bán kính** để lưu. **Hủy chọn tâm** chỉ tắt chế độ chọn, không đổi vùng đã lưu. Liên kết Google Maps trong thông báo cũng dùng tâm hiện tại.
 

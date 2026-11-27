@@ -44,6 +44,8 @@ import { circlePolygon, validCircle, type Point } from "@/lib/geo";
 import { rosterCounts } from "@/lib/roster";
 import { deviceContext } from "@/lib/device-context";
 import { withRequestTimeout } from "@/lib/request-timeout";
+import { createStateRefresh } from "@/lib/state-refresh";
+import { boundaryDraftKey } from "@/lib/boundary-draft";
 import { schoolCenter, schoolRadiusMeters } from "@/lib/campus-preset";
 import HistoryPanel from "./history-panel";
 import { useScreenAwake } from "./use-screen-awake";
@@ -147,7 +149,7 @@ export default function Dashboard() {
   );
 }
 function Screen() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [me, setMe] = useState<Person | null>(null),
     [ready, setReady] = useState(false),
     [state, setState] = useState<State | null>(null),
@@ -170,7 +172,19 @@ function Screen() {
   const [userForm] = Form.useForm(),
     [campusForm] = Form.useForm(),
     [loginForm] = Form.useForm();
-  const watchedCircle = Form.useWatch("circle", campusForm);
+  const watchedBoundary = Form.useWatch([], {
+    form: campusForm,
+    preserve: true,
+  });
+  const watchedCircle = watchedBoundary?.circle;
+  const boundaryBaseline = useRef("");
+  const leavePromptOpen = useRef(false);
+  const boundaryDirty = !!(
+    boundaryOpen &&
+    watchedBoundary &&
+    boundaryDraftKey(boundaryMode, watchedBoundary, draft) !==
+      boundaryBaseline.current
+  );
   const previewCircle =
     boundaryOpen && boundaryMode === "circle" && validCircle(watchedCircle)
       ? watchedCircle
@@ -181,48 +195,65 @@ function Screen() {
         ? circlePolygon(previewCircle)
         : []
       : draft;
-  const sessionEpoch = useRef(0);
   const screenAwake = useScreenAwake(keepScreenOn && !!me?.tracking);
-  const refreshSequence = useRef(0);
-  const refresh = useCallback(async () => {
-    const epoch = sessionEpoch.current;
-    const sequence = ++refreshSequence.current;
-    try {
-      const next = await api<State>("state");
-      if (
-        epoch !== sessionEpoch.current ||
-        sequence !== refreshSequence.current
-      )
-        return;
-      setState(next);
-      setMe(next.me);
-      setError("");
-    } catch (e) {
-      if (
-        epoch !== sessionEpoch.current ||
-        sequence !== refreshSequence.current
-      )
-        return;
-      if ((e as Error & { status?: number }).status === 401) {
-        setMe(null);
-        setState(null);
-      } else setError((e as Error).message);
-    }
-  }, []);
+  const stateRefresh = useRef<ReturnType<
+    typeof createStateRefresh<State>
+  > | null>(null);
+  if (!stateRefresh.current) {
+    stateRefresh.current = createStateRefresh<State>({
+      load: () => api<State>("state"),
+      apply: (next) => {
+        setState(next);
+        setMe(next.me);
+        setError("");
+      },
+      onError: (e) => {
+        if ((e as Error & { status?: number }).status === 401) {
+          stateRefresh.current!.invalidate();
+          resetSessionUi();
+          setMe(null);
+          setState(null);
+        } else setError((e as Error).message);
+      },
+    });
+  }
+  const refresh = useCallback(
+    (force = false) => stateRefresh.current!.request(force),
+    [],
+  );
   useEffect(() => {
+    if (!boundaryDirty) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [boundaryDirty]);
+  useEffect(() => {
+    let active = true;
     api<{ user: Person | null }>("auth/me")
       .then(async (r) => {
+        if (!active) return;
         setMe(r.user);
-        if (r.user) await refresh();
+        if (r.user) await refresh(true);
       })
-      .catch((e) => setError(e.message))
-      .finally(() => setReady(true));
+      .catch((e) => {
+        if (active) setError(e.message);
+      })
+      .finally(() => {
+        if (active) setReady(true);
+      });
+    return () => {
+      active = false;
+      stateRefresh.current!.invalidate();
+    };
   }, [refresh]);
   useEffect(() => {
     if (!me) return;
     const id = setInterval(refresh, 15000);
     const resume = () => {
-      if (!document.hidden) void refresh();
+      if (!document.hidden) void refresh(true);
     };
     document.addEventListener("visibilitychange", resume);
     window.addEventListener("pageshow", resume);
@@ -243,7 +274,6 @@ function Screen() {
         ...deviceContext(),
       }),
     (receipt) => {
-      refreshSequence.current++;
       const update = (person: Person): Person =>
         person.id === me?.id
           ? {
@@ -264,7 +294,7 @@ function Screen() {
           : previous,
       );
       if (tab === "me") setFocus(receipt.reading);
-      void refresh();
+      void refresh(true);
     },
   );
   async function act(action: () => Promise<unknown>, success?: string) {
@@ -272,7 +302,7 @@ function Screen() {
     try {
       await action();
       if (success) message.success(success);
-      await refresh();
+      await refresh(true);
       return true;
     } catch (e) {
       message.error((e as Error).message);
@@ -285,11 +315,13 @@ function Screen() {
     setBusy(true);
     try {
       const r = await api<{ user: Person }>("auth/login", "POST", values);
-      sessionEpoch.current++;
+      stateRefresh.current!.invalidate();
+      resetSessionUi();
+      setState(null);
       setFocus(null);
       setMe(r.user);
       setTab(r.user.role === "admin" ? "overview" : "me");
-      await refresh();
+      await refresh(true);
       loginForm.resetFields();
     } catch (e) {
       message.error((e as Error).message);
@@ -297,10 +329,63 @@ function Screen() {
       setBusy(false);
     }
   }
-  async function logout() {
+  function requestBoundaryExit(action: () => void | Promise<void>) {
+    if (boundaryOpen && busy) return;
+    if (!boundaryDirty) {
+      void action();
+      return;
+    }
+    if (leavePromptOpen.current) return;
+    leavePromptOpen.current = true;
+    modal.confirm({
+      title: "Ranh giới có thay đổi chưa lưu",
+      content:
+        "Rời màn hình sẽ bỏ bản nháp. Vùng đã lưu trên máy chủ vẫn được giữ nguyên.",
+      okText: "Bỏ thay đổi",
+      cancelText: "Tiếp tục chỉnh sửa",
+      okButtonProps: { danger: true },
+      onCancel: () => {
+        leavePromptOpen.current = false;
+      },
+      onOk: async () => {
+        leavePromptOpen.current = false;
+        setBoundaryOpen(false);
+        setPlacingCenter(false);
+        await action();
+      },
+    });
+  }
+  function navigate(next: Tab, point: Point | null = null) {
+    if (next === tab) {
+      setFocus(point);
+      return;
+    }
+    requestBoundaryExit(() => {
+      setTab(next);
+      setFocus(point);
+      setBoundaryOpen(false);
+      setPlacingCenter(false);
+    });
+  }
+  function logout() {
+    requestBoundaryExit(performLogout);
+  }
+  function resetSessionUi() {
+    setBoundaryOpen(false);
+    setPlacingCenter(false);
+    setCreateOpen(false);
+    setReport(null);
+    setFocus(null);
+    setConsent(false);
+    setKeepScreenOn(false);
+    campusForm.resetFields();
+    userForm.resetFields();
+  }
+  async function performLogout() {
     try {
       await api("auth/logout", "POST", {});
-      sessionEpoch.current++;
+      stateRefresh.current!.invalidate();
+      resetSessionUi();
       setMe(null);
       setState(null);
       setFocus(null);
@@ -507,8 +592,7 @@ function Screen() {
               icon={<AimOutlined />}
               aria-label={`Xem vị trí ${p.name}`}
               onClick={() => {
-                setFocus(p.reading);
-                setTab("overview");
+                navigate("overview", p.reading);
               }}
             />
           )}
@@ -532,17 +616,25 @@ function Screen() {
     },
   ];
   function openBoundary() {
+    if (boundaryOpen) return;
     setPlacingCenter(false);
     setDraft(campus?.polygon ?? []);
-    setBoundaryMode(campus?.circle ? "circle" : "polygon");
+    const mode = campus?.circle ? "circle" : "polygon";
+    setBoundaryMode(mode);
     setFocus(null);
-    campusForm.setFieldsValue({
+    const values = {
       ...campus,
       circle: campus?.circle ?? {
         center: schoolCenter,
         radiusMeters: schoolRadiusMeters,
       },
-    });
+    };
+    boundaryBaseline.current = boundaryDraftKey(
+      mode,
+      values,
+      campus?.polygon ?? [],
+    );
+    campusForm.setFieldsValue(values);
     setTab("boundary");
     setBoundaryOpen(true);
   }
@@ -658,7 +750,10 @@ function Screen() {
   return (
     <div className="shell">
       <aside className="sidebar">
-        <a className="brand" onClick={() => setTab(admin ? "overview" : "me")}>
+        <a
+          className="brand"
+          onClick={() => navigate(admin ? "overview" : "me")}
+        >
           <span className="brand-symbol">
             <SafetyCertificateOutlined />
           </span>
@@ -677,11 +772,7 @@ function Screen() {
             <button
               key={n.key}
               className={current === n.key ? "selected" : ""}
-              onClick={() => {
-                setTab(n.key);
-                setFocus(null);
-                setBoundaryOpen(false);
-              }}
+              onClick={() => navigate(n.key)}
             >
               {n.icon}
               <span>{n.label}</span>
@@ -720,14 +811,18 @@ function Screen() {
               <i /> {error ? "Mất kết nối máy chủ" : "Máy chủ trực tuyến"}
             </span>
             <Tooltip title="Làm mới">
-              <Button type="text" icon={<ReloadOutlined />} onClick={refresh} />
+              <Button
+                type="text"
+                icon={<ReloadOutlined />}
+                onClick={() => void refresh(true)}
+              />
             </Tooltip>
             <Badge count={activeAlerts.length} size="small">
               <Button
                 type="text"
                 aria-label="Mở cảnh báo"
                 icon={<BellOutlined />}
-                onClick={() => setTab("alerts")}
+                onClick={() => navigate("alerts")}
               />
             </Badge>
             <Button
@@ -799,7 +894,7 @@ function Screen() {
             </div>
           ) : (
             <>
-              {campus?.boundaryNote && (
+              {current !== "me" && campus?.boundaryNote && (
                 <Alert
                   type={
                     campus.boundaryNote.startsWith("Vùng tạm")
@@ -811,9 +906,9 @@ function Screen() {
                   description={
                     campus.boundaryNote.startsWith("Vùng tạm") ? (
                       <>
-                        GPS được tính trong/ngoài theo vùng đang cấu hình.
-                        Admin có thể đặt tâm ở nơi khác, đổi bán kính hoặc vẽ
-                        đa giác theo khuôn viên thực tế.{" "}
+                        GPS được tính trong/ngoài theo vùng đang cấu hình. Admin
+                        có thể đặt tâm ở nơi khác, đổi bán kính hoặc vẽ đa giác
+                        theo khuôn viên thực tế.{" "}
                         {campus.circle && (
                           <a
                             href={`https://www.google.com/maps/search/?api=1&query=${campus.circle.center.lat},${campus.circle.center.lng}`}
@@ -875,11 +970,18 @@ function Screen() {
                       title="Thiết bị đang đăng nhập chưa bật chia sẻ GPS"
                       description={
                         <>
-                          <p>Đăng nhập không tự bật định vị. Nếu muốn hiện vị trí điện thoại này trên bản đồ, vào Vị trí của tôi và bật chia sẻ.</p>
-                          <Button onClick={() => {
-                            setFocus(null);
-                            setTab("me");
-                          }}>Chia sẻ vị trí máy này</Button>
+                          <p>
+                            Đăng nhập không tự bật định vị. Nếu muốn hiện vị trí
+                            điện thoại này trên bản đồ, vào Vị trí của tôi và
+                            bật chia sẻ.
+                          </p>
+                          <Button
+                            onClick={() => {
+                              navigate("me");
+                            }}
+                          >
+                            Chia sẻ vị trí máy này
+                          </Button>
                         </>
                       }
                       style={{ marginBottom: 20 }}
@@ -941,10 +1043,14 @@ function Screen() {
                           <h2>Bản đồ vị trí đã nhận</h2>
                           <p>{campus?.address}</p>
                         </div>
-                        <Button onClick={() => {
-                          setFocus(null);
-                          setOverviewFitRevision((value) => value + 1);
-                        }}>Xem tất cả vị trí</Button>
+                        <Button
+                          onClick={() => {
+                            setFocus(null);
+                            setOverviewFitRevision((value) => value + 1);
+                          }}
+                        >
+                          Xem tất cả vị trí
+                        </Button>
                       </div>
                       <div className="map-wrap">
                         <Map
@@ -977,7 +1083,9 @@ function Screen() {
                           Mất cập nhật
                         </span>
                         <span>Rê chuột hoặc chạm điểm để xem thông tin</span>
-                        <span>Điểm xám = đã dừng chia sẻ; vòng tròn = sai số GPS</span>
+                        <span>
+                          Điểm xám = đã dừng chia sẻ; vòng tròn = sai số GPS
+                        </span>
                       </div>
                     </div>
                     <div className="panel activity">
@@ -989,7 +1097,7 @@ function Screen() {
                       <Button
                         type="text"
                         className="view-all"
-                        onClick={() => setTab("alerts")}
+                        onClick={() => navigate("alerts")}
                       >
                         Xem tất cả sự kiện <ArrowRightOutlined />
                       </Button>
@@ -1004,7 +1112,7 @@ function Screen() {
                           vị trí hiện tại.
                         </p>
                       </div>
-                      <Button type="text" onClick={() => setTab("people")}>
+                      <Button type="text" onClick={() => navigate("people")}>
                         Quản lý tài khoản <ArrowRightOutlined />
                       </Button>
                     </div>
@@ -1038,6 +1146,11 @@ function Screen() {
                               : "Đang vẽ ranh giới"
                             : "Ranh giới khuôn viên"}
                         </h2>
+                        {boundaryDirty && (
+                          <Tag color="gold" className="draft-status">
+                            Chưa lưu
+                          </Tag>
+                        )}
                         <p>
                           {boundaryOpen
                             ? boundaryMode === "circle"
@@ -1061,7 +1174,7 @@ function Screen() {
                       }
                       circle={boundaryOpen ? previewCircle : campus?.circle}
                       onCircleChange={
-                        boundaryOpen && boundaryMode === "circle"
+                        boundaryOpen && boundaryMode === "circle" && !busy
                           ? (value) =>
                               campusForm.setFieldsValue({ circle: value })
                           : undefined
@@ -1070,6 +1183,7 @@ function Screen() {
                       onCenterPick={
                         boundaryOpen &&
                         boundaryMode === "circle" &&
+                        !busy &&
                         placingCenter &&
                         previewCircle
                           ? (point) => {
@@ -1082,12 +1196,16 @@ function Screen() {
                           : undefined
                       }
                       fitRegion
-                      drawing={boundaryOpen && boundaryMode === "polygon"}
+                      drawing={
+                        boundaryOpen && boundaryMode === "polygon" && !busy
+                      }
                       onPoint={(p) => setDraft((d) => [...d, p])}
                       focus={focus}
                     />
                     <div className="map-tools">
-                      {(boundaryOpen ? previewCircle : campus?.circle) && (
+                      {(boundaryOpen
+                        ? previewPolygon.length
+                        : (campus?.polygon.length ?? 0)) >= 3 && (
                         <Button
                           onClick={() =>
                             setRegionFitRevision((value) => value + 1)
@@ -1166,7 +1284,11 @@ function Screen() {
                     </div>
                     {boundaryOpen ? (
                       <>
-                        <Form form={campusForm} layout="vertical">
+                        <Form
+                          form={campusForm}
+                          layout="vertical"
+                          disabled={busy}
+                        >
                           <Form.Item label="Cách xác định vùng">
                             <Select
                               aria-label="Cách xác định vùng"
@@ -1313,7 +1435,13 @@ function Screen() {
                           >
                             Lưu khuôn viên
                           </Button>
-                          <Button onClick={() => setBoundaryOpen(false)}>
+                          <Button
+                            disabled={busy}
+                            onClick={() => {
+                              setBoundaryOpen(false);
+                              setPlacingCenter(false);
+                            }}
+                          >
                             Hủy
                           </Button>
                         </Space>
@@ -1425,13 +1553,6 @@ function Screen() {
               )}
               {current === "me" && (
                 <>
-                  <Alert
-                    showIcon
-                    type="warning"
-                    title="Giới hạn của phiên bản web"
-                    description="Giữ trang mở để gửi vị trí, mục tiêu mỗi 60 giây. Khóa màn hình hoặc chuyển ứng dụng có thể dừng cập nhật. Cài web/PWA vào màn hình chính cũng không bảo đảm GPS chạy nền."
-                    style={{ marginBottom: 22 }}
-                  />
                   <div className="personal-grid">
                     <section className="panel personal-card">
                       <div className="personal-pin">
@@ -1464,24 +1585,17 @@ function Screen() {
                           style={{ marginBottom: 16 }}
                         />
                       )}
-                      {/iPhone|iPad/.test(navigator.userAgent) && (
-                        <Alert
-                          type="info"
-                          showIcon
-                          title="Cấp quyền GPS trên iPhone / Safari"
-                          description="Chọn Cho phép khi website hỏi vị trí. Nếu đã chặn: vào Cài đặt → Quyền riêng tư & Bảo mật → Dịch vụ định vị → Trang web Safari; cho phép khi dùng và bật Vị trí chính xác. Giữ trang hiển thị để gửi GPS."
-                          style={{ marginBottom: 16 }}
-                        />
-                      )}
                       {!me.tracking ? (
                         <>
                           <Alert
                             type="info"
                             showIcon
                             title="Chia sẻ vị trí đang tắt"
-                            description={me.reading
-                              ? "Bản đồ đang hiển thị vị trí cuối đã lưu. Bật chia sẻ để lấy GPS mới từ điện thoại đang dùng."
-                              : "Đăng nhập chưa tự gửi GPS. Đồng ý chia sẻ và bấm nút bên dưới để lấy vị trí điện thoại này."}
+                            description={
+                              me.reading
+                                ? "Bản đồ đang hiển thị vị trí cuối đã lưu. Bật chia sẻ để lấy GPS mới từ điện thoại đang dùng."
+                                : "Đăng nhập chưa tự gửi GPS. Đồng ý chia sẻ và bấm nút bên dưới để lấy vị trí điện thoại này."
+                            }
                             style={{ marginBottom: 16 }}
                           />
                           <Checkbox
@@ -1589,6 +1703,30 @@ function Screen() {
                         Quyền vị trí phải được cấp trong trình duyệt. Điện thoại
                         truy cập qua HTTPS.
                       </small>
+                      <details className="gps-help">
+                        <summary>Hướng dẫn GPS và giới hạn web</summary>
+                        <Alert
+                          showIcon
+                          type="warning"
+                          title="Giới hạn của phiên bản web"
+                          description="Giữ trang mở để gửi vị trí, mục tiêu mỗi 60 giây. Khóa màn hình hoặc chuyển ứng dụng có thể dừng cập nhật. Cài web/PWA vào màn hình chính cũng không bảo đảm GPS chạy nền."
+                        />
+                        {/iPhone|iPad/.test(navigator.userAgent) && (
+                          <Alert
+                            type="info"
+                            showIcon
+                            title="Cấp quyền GPS trên iPhone / Safari"
+                            description="Chọn Cho phép khi website hỏi vị trí. Nếu đã chặn: vào Cài đặt → Quyền riêng tư & Bảo mật → Dịch vụ định vị → Trang web Safari; cho phép khi dùng và bật Vị trí chính xác. Giữ trang hiển thị để gửi GPS."
+                          />
+                        )}
+                        {campus?.boundaryNote && (
+                          <Alert
+                            showIcon
+                            type="info"
+                            title={campus.boundaryNote}
+                          />
+                        )}
+                      </details>
                     </section>
                     <section className="panel map-panel">
                       <div className="panel-heading">
@@ -1613,14 +1751,16 @@ function Screen() {
                         />
                         {!me.reading && (
                           <div className="map-overlay">
-                            <AimOutlined /> {me.tracking
+                            <AimOutlined />{" "}
+                            {me.tracking
                               ? "Chưa nhận được GPS. Kiểm tra quyền vị trí và bấm Cập nhật GPS ngay."
                               : "Chưa có GPS. Bật chia sẻ để đưa vị trí lên bản đồ."}
                           </div>
                         )}
                       </div>
                       <div className="map-legend">
-                        Rê chuột hoặc chạm điểm vị trí để xem thông tin. Vòng tròn biểu thị sai số GPS.
+                        Rê chuột hoặc chạm điểm vị trí để xem thông tin. Vòng
+                        tròn biểu thị sai số GPS.
                       </div>
                     </section>
                   </div>

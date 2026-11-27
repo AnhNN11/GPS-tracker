@@ -4,8 +4,9 @@ import { startTestDatabase } from "../scripts/test-database";
 const fixture = await startTestDatabase();
 const { collections, closeDatabase } = await import("../src/lib/db");
 const { createUser } = await import("../src/lib/auth");
-const { initialCampus, saveCampus, setTracking, acceptReading } =
-  await import("../src/lib/store");
+const { initialCampus, saveCampus, setTracking, acceptReading } = await import(
+  "../src/lib/store"
+);
 const {
   readHistory,
   excursionDetail,
@@ -345,6 +346,12 @@ test("Device-specific journeys are scoped to their owner and switching device ne
   assert.equal(event?.returnedAt, null);
   const user = await c.users.findOne({ id });
   assert.ok(user);
+  assert.ok(event);
+  const detail = await excursionDetail(user, event.id);
+  assert.equal(detail.points.length, 2);
+  assert.ok(detail.points.every((point) => point.deviceId === a.deviceId));
+  assert.deepEqual(detail.segments, [[0, 1]]);
+  assert.deepEqual(detail.breaks, []);
   const q = parseHistoryQuery(
     new URLSearchParams({ from: day(now), to: day(now + 120000), userId: id }),
   );
@@ -356,6 +363,64 @@ test("Device-specific journeys are scoped to their owner and switching device ne
   await assert.rejects(readJourney(user, { ...q, userId: "other" }));
   await assert.rejects(
     readJourney({ ...user, role: "admin" }, { ...q, userId: undefined }),
+  );
+  await setTracking(id, false);
+});
+
+test("Excursion details keep legacy points separate and split unreliable GPS", async () => {
+  await saveCampus({ ...initialCampus, circle: undefined, polygon });
+  const id = await createUser(
+    "Legacy detail",
+    "legacy-detail@example.invalid",
+    "a-secure-password",
+  );
+  await setTracking(id, true);
+  const now = Date.now();
+  const outside = { lat: 14.001, lng: 108.004, accuracy: 5 };
+  await acceptReading(id, { ...outside, capturedAt: now }, now);
+  await acceptReading(id, { ...outside, capturedAt: now + 60000 }, now + 60000);
+  await acceptReading(
+    id,
+    { ...outside, accuracy: 120, capturedAt: now + 90000 },
+    now + 90000,
+  );
+  await acceptReading(
+    id,
+    { ...outside, capturedAt: now + 120000 },
+    now + 120000,
+  );
+  await acceptReading(
+    id,
+    { lat: 14.001, lng: 108.001, accuracy: 5, capturedAt: now + 270000 },
+    now + 270000,
+  );
+  const event = await c.excursions.findOne({ user_id: id });
+  const user = await c.users.findOne({ id });
+  assert.ok(event && user);
+  // Old installations may have explicit null IDs as well as missing IDs.
+  await c.samples.updateOne({ user_id: id, capturedAt: now }, [
+    { $set: { deviceId: null } },
+  ]);
+  const detail = await excursionDetail(user, event.id);
+  assert.equal(detail.points.length, 4);
+  assert.ok(detail.points.every((point) => !point.deviceId));
+  assert.deepEqual(detail.segments, [[0, 1], [2], [3]]);
+  assert.equal(detail.breaks.length, 2);
+  assert.ok(detail.breaks.every((gap) => gap.reason === "GPS có sai số lớn"));
+  // A detail may include the next sample as context; never connect a data gap.
+  await c.samples.insertOne({
+    ...detail.points[3],
+    id: "legacy-gap-context",
+    capturedAt: now + 280000,
+  });
+  await c.excursions.updateOne(
+    { id: event.id },
+    { $set: { lastOutsideAt: now + 240000 } },
+  );
+  const withGap = await excursionDetail(user, event.id);
+  assert.ok(withGap.breaks.some((gap) => gap.reason === "Gián đoạn thời gian"));
+  await assert.rejects(
+    excursionDetail({ ...user, id: "other-user" }, event.id),
   );
   await setTracking(id, false);
 });

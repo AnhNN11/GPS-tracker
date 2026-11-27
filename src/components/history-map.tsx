@@ -29,8 +29,11 @@ function Fit({
     ];
     if (coordinates.length)
       map.fitBounds(coordinates, { padding: [30, 30], maxZoom: 18 });
-    const resize = () => { map.invalidateSize(); };
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    const resize = () => {
+      map.invalidateSize();
+    };
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
     observer?.observe(map.getContainer());
     window.addEventListener("resize", resize);
     return () => {
@@ -43,9 +46,11 @@ function Fit({
 export default function HistoryMap({
   points,
   boundary,
+  segments,
 }: {
   points: LocationSample[];
   boundary: Campus | null;
+  segments: number[][];
 }) {
   const first = points[0] ?? boundary?.polygon[0] ?? { lat: 13.9833, lng: 108 };
   const stride = Math.max(1, Math.ceil(points.length / 200));
@@ -71,10 +76,15 @@ export default function HistoryMap({
           />
         )
       )}
-      <Polyline
-        positions={points.map((p) => [p.lat, p.lng])}
-        pathOptions={{ color: "#516c83", weight: 3, opacity: 0.7 }}
-      />
+      {segments
+        .filter((segment) => segment.length > 1)
+        .map((segment, index) => (
+          <Polyline
+            key={index}
+            positions={segment.map((i) => [points[i].lat, points[i].lng])}
+            pathOptions={{ color: "#516c83", weight: 3, opacity: 0.7 }}
+          />
+        ))}
       {points
         .filter((_, i) => i % stride === 0 || i === points.length - 1)
         .map((p) => (
