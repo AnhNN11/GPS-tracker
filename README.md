@@ -40,6 +40,8 @@ Lịch sử chỉ bắt đầu từ khi triển khai bản này; không thể kh
 
 ## Phản hồi cập nhật GPS
 
+Đăng nhập không tự bật chia sẻ; giao diện nhắc rõ khi chưa bật. Khi đã bật, trang thử gửi GPS ngay và khoảng mỗi 60 giây; dashboard lấy trạng thái mỗi 15 giây và ngay khi quay lại trang/có mạng. Bản đồ tổng quan tự căn các điểm khi có người gửi mẫu đầu tiên, có nút **Xem tất cả vị trí**. Rê chuột hoặc chạm điểm để xem tên, email, trạng thái, tọa độ, sai số, giờ GPS ghi và giờ máy chủ nhận. Điểm cũ/mất cập nhật/dừng chia sẻ vẫn hiện là vị trí cuối với màu tương ứng, không coi là vị trí hiện tại.
+
 Trang Vị trí của tôi hiển thị riêng đang lấy GPS, đang gửi, đã lưu trên máy chủ hoặc lỗi. API trả lại mẫu và thời điểm nhận; giao diện cập nhật ngay từ phản hồi này, hiển thị giây và tự đưa bản đồ đến điểm mới. Nút **Cập nhật GPS ngay** lấy mẫu mới mà không phải chờ 60 giây. Nếu GPS chính xác cao thất bại, thử lại chế độ thường; sai số thực tế vẫn được lưu và mẫu quá kém vẫn được phân loại chưa rõ. Từ chối quyền không tự động thử vượt quyền. Khi quay lại trang hoặc có mạng trở lại, thử gửi mẫu mới. Không thay thời điểm GPS bằng giờ máy chủ hay giả lập vị trí thiết bị.
 
 ## Chỉnh bán kính
@@ -93,3 +95,5 @@ Mẫu mới có mã trình duyệt/ứng dụng ngẫu nhiên cùng nhãn hệ �
 Bản hiện tại chỉ dùng web/PWA. Service Worker không có API GPS để ghi vị trí liên tục ở nền. Khi khóa màn hình hoặc chuyển ứng dụng, Android/iOS có thể ngừng/suspend trang. Thêm vào màn hình chính không bảo đảm GPS nền.
 
 Trong Vị trí của tôi có tùy chọn **Giữ màn hình sáng khi đang chia sẻ** bằng Screen Wake Lock nếu trình duyệt hỗ trợ. Khóa chỉ hoạt động khi trang đang hiển thị; hệ điều hành có thể từ chối/thu hồi. Khi trở lại trang, lấy mẫu GPS mới và thử giữ màn hình sáng lại nếu tùy chọn còn bật. Mất dữ liệu được thể hiện là chưa rõ/mất cập nhật, không suy đoán vị trí nền.
+
+Ưu tiên Safari trên iPhone: trang có hướng dẫn cấp quyền, gửi mẫu lại khi `pageshow`/quay lại trang và cập nhật dashboard ngay khi trở lại. Luồng đăng nhập/GPS và tải lịch sử không phụ thuộc `AbortSignal.timeout`; mã thiết bị có phương án Web Crypto khi thiếu `randomUUID`; bản đồ có phương án resize khi thiếu `ResizeObserver`. Các phương án này không mở khóa GPS nền hoặc vượt quyền người dùng. Chạm điểm mở thông tin trên màn hình cảm ứng; rê chuột mở thông tin trên máy tính.

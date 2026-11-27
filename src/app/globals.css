@@ -488,7 +488,10 @@ h2 {
   box-shadow: 0 3px 14px #253e2420;
   border-radius: 7px;
   font-size: 11px;
-  white-space: nowrap;
+  white-space: normal;
+  width: max-content;
+  max-width: calc(100% - 30px);
+  text-align: center;
   color: #62786a;
 }
 .map-legend {
@@ -1305,6 +1308,25 @@ footer > span:last-child {
 .circle-edit-marker:focus-visible {
   outline: 4px solid #facc15;
   outline-offset: 3px;
+}
+.map-person-details {
+  display: grid;
+  gap: 5px;
+  min-width: 205px;
+  max-width: 270px;
+  color: #142c24;
+  font: 12px/1.4 Arial, Helvetica, sans-serif;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.map-person-details > strong {
+  font-size: 14px;
+}
+.person-map-tooltip {
+  padding: 12px;
+  border: 1px solid #9db9aa;
+  border-radius: 10px;
+  box-shadow: 0 3px 16px #142c2426;
 }
 .history-summary > div:nth-child(2) strong {
   color: #ac2020;

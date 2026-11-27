@@ -298,6 +298,9 @@ try {
     await request("state", "GET", undefined, adminCookie)
   ).json();
   assert.equal(state.users.length, 2);
+  const adminMapPerson = state.users.find((person: { id: string }) => person.id === own.me.id);
+  assert.deepEqual(adminMapPerson.reading, postedReading);
+  assert.equal(adminMapPerson.lastReceivedAt, receipt.receivedAt);
   const memberId = own.me.id;
   const { acceptReading } = await import("../src/lib/store");
   const { dayInVietnam } = await import("../src/lib/history");

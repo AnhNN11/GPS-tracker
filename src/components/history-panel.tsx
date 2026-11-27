@@ -23,6 +23,7 @@ import {
 import type { Person } from "@/lib/types";
 import type { LocationSample, Excursion, Campus } from "@/lib/models";
 import JourneyTool from "./journey-tool";
+import { withRequestTimeout } from "@/lib/request-timeout";
 const HistoryMap = dynamic(() => import("./history-map"), {
   ssr: false,
   loading: () => (
@@ -173,12 +174,15 @@ export default function HistoryPanel({
   async function exportCsv() {
     setExporting(true);
     try {
-      const response = await fetch("/api/history?" + params + "&format=csv", {
-        signal: AbortSignal.timeout(30000),
-        cache: "no-store",
-      });
-      if (!response.ok) throw new Error((await response.json()).error);
-      const url = URL.createObjectURL(await response.blob()),
+      const blob = await withRequestTimeout(async (signal) => {
+        const response = await fetch("/api/history?" + params + "&format=csv", {
+          signal,
+          cache: "no-store",
+        });
+        if (!response.ok) throw new Error((await response.json()).error);
+        return response.blob();
+      }, 30000);
+      const url = URL.createObjectURL(blob),
         link = document.createElement("a");
       link.href = url;
       link.download = "gps-" + view + "-" + from + "-" + to + ".csv";
@@ -196,12 +200,15 @@ export default function HistoryPanel({
     setDetailOpen(true);
     setDetailLoading(true);
     try {
-      const response = await fetch(
+      const result = await withRequestTimeout(async (signal) => {
+        const response = await fetch(
           "/api/history/events/" + encodeURIComponent(id),
-          { cache: "no-store", signal: AbortSignal.timeout(30000) },
+          { cache: "no-store", signal },
         ),
-        result = await response.json();
-      if (!response.ok) throw new Error(result.error);
+          result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        return result;
+      }, 30000);
       if (sequence === detailRequest.current) setDetail(result);
     } catch (e) {
       if (sequence === detailRequest.current) {

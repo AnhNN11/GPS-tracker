@@ -29,9 +29,14 @@ function Fit({
     ];
     if (coordinates.length)
       map.fitBounds(coordinates, { padding: [30, 30], maxZoom: 18 });
-    const observer = new ResizeObserver(() => map.invalidateSize());
-    observer.observe(map.getContainer());
-    return () => observer.disconnect();
+    const resize = () => { map.invalidateSize(); };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    observer?.observe(map.getContainer());
+    window.addEventListener("resize", resize);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", resize);
+    };
   }, [map, points, boundary]);
   return null;
 }

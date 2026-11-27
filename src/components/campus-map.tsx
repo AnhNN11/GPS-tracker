@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   divIcon,
   type Marker as LeafletMarker,
+  type Map as LeafletMap,
   type LeafletEvent,
 } from "leaflet";
 import {
@@ -26,14 +27,41 @@ import {
   type CircleRegion,
 } from "@/lib/geo";
 import type { Person } from "@/lib/types";
+import { mapPresence } from "@/lib/map-presence";
 import "leaflet/dist/leaflet.css";
-const colors: Record<string, string> = {
-  inside: "#087443",
-  outside: "#c32626",
-  stale: "#985500",
-  pending: "#985500",
-  uncertain: "#64748b",
-};
+const mapTime = (value: number | null | undefined) =>
+  value
+    ? new Date(value).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })
+    : "Chưa có thời điểm nhận";
+function PersonDetails({ person, now, staleMinutes }: {
+  person: Person;
+  now: number;
+  staleMinutes: number;
+}) {
+  const presence = mapPresence(person, now, staleMinutes);
+  return (
+    <div className="map-person-details">
+      <strong>{person.name}</strong>
+      <span>{person.email}</span>
+      <b style={{ color: presence.color }}>{presence.label}</b>
+      <span>GPS ghi: {mapTime(person.reading!.capturedAt)}</span>
+      <span>Máy chủ nhận: {mapTime(person.lastReceivedAt)}</span>
+      <span>Sai số: ±{Math.round(person.reading!.accuracy)} m</span>
+      <span>Tọa độ: {person.reading!.lat.toFixed(6)}, {person.reading!.lng.toFixed(6)}</span>
+    </div>
+  );
+}
+function fitPeopleBounds(map: LeafletMap, people: Person[], circle?: CircleRegion) {
+  const points = people.filter((p) => p.reading).map(
+    (p) => [p.reading!.lat, p.reading!.lng] as [number, number],
+  );
+  if (!points.length) return;
+  if (circle)
+    points.push(...circlePolygon(circle).map(
+      (p) => [p.lat, p.lng] as [number, number],
+    ));
+  map.fitBounds(points, { padding: [40, 40], maxZoom: 17, animate: false });
+}
 function Controls({
   drawing,
   onPoint,
@@ -43,6 +71,8 @@ function Controls({
   editingCircle,
   fitRevision,
   onCenterPick,
+  people,
+  fitPeople,
 }: {
   drawing: boolean;
   onPoint?: (p: Point) => void;
@@ -52,6 +82,8 @@ function Controls({
   editingCircle: boolean;
   fitRevision: number;
   onCenterPick?: (p: Point) => void;
+  people: Person[];
+  fitPeople: boolean;
 }) {
   const map = useMap();
   const wasEditing = useRef(false),
@@ -59,6 +91,9 @@ function Controls({
     lastFit = useRef(fitRevision);
   const region = useRef({ circle, fitRegion });
   region.current = { circle, fitRegion };
+  const peopleRegion = useRef({ people, circle, fitPeople, focus });
+  peopleRegion.current = { people, circle, fitPeople, focus };
+  const peopleKey = people.filter((p) => p.reading).map((p) => p.id).sort().join(",");
   useMapEvents({
     click(e) {
       const point = { lat: e.latlng.lat, lng: e.latlng.lng };
@@ -73,6 +108,11 @@ function Controls({
   useEffect(() => {
     if (focus) map.flyTo([focus.lat, focus.lng], 17);
   }, [focus?.lat, focus?.lng, map]);
+  useEffect(() => {
+    if (!fitPeople || focus) return;
+    const current = peopleRegion.current;
+    fitPeopleBounds(map, current.people, current.circle);
+  }, [fitPeople, peopleKey, fitRevision, focus, map]);
   useEffect(() => {
     const shouldFit =
       !editingCircle ||
@@ -97,7 +137,7 @@ function Controls({
     map,
   ]);
   useEffect(() => {
-    const observer = new ResizeObserver(() => {
+    const resize = () => {
       map.invalidateSize();
       const current = region.current;
       if (current.fitRegion && current.circle)
@@ -107,9 +147,17 @@ function Controls({
           ),
           { padding: [25, 25], maxZoom: 18, animate: false },
         );
-    });
-    observer.observe(map.getContainer());
-    return () => observer.disconnect();
+      else if (peopleRegion.current.fitPeople && !peopleRegion.current.focus)
+        fitPeopleBounds(map, peopleRegion.current.people, peopleRegion.current.circle);
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    observer?.observe(map.getContainer());
+    window.addEventListener("resize", resize);
+    resize();
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", resize);
+    };
   }, [map]);
   return null;
 }
@@ -256,6 +304,9 @@ export default function CampusMap({
   onCircleChange,
   fitRevision = 0,
   onCenterPick,
+  fitPeople = false,
+  now = Date.now(),
+  staleMinutes = 5,
 }: {
   polygon: Point[];
   people?: Person[];
@@ -267,6 +318,9 @@ export default function CampusMap({
   onCircleChange?: (circle: CircleRegion) => void;
   fitRevision?: number;
   onCenterPick?: (p: Point) => void;
+  fitPeople?: boolean;
+  now?: number;
+  staleMinutes?: number;
 }) {
   const center = focus ??
     people.find((person) => person.reading)?.reading ??
@@ -292,6 +346,8 @@ export default function CampusMap({
         editingCircle={!!onCircleChange}
         fitRevision={fitRevision}
         onCenterPick={onCenterPick}
+        people={people}
+        fitPeople={fitPeople}
       />
       {circle ? (
         <>
@@ -345,38 +401,40 @@ export default function CampusMap({
         ))}
       {people
         .filter((p) => p.reading)
-        .map((p) => (
-          <Circle
-            key={p.id}
-            center={[p.reading!.lat, p.reading!.lng]}
-            radius={p.reading!.accuracy}
-            pathOptions={{
-              color: colors[p.status] ?? "#64748b",
-              fillOpacity: 0.1,
-              weight: 1,
-            }}
-          >
-            <CircleMarker
+        .map((p) => {
+          const presence = mapPresence(p, now, staleMinutes);
+          return (
+            <Circle
+              key={p.id}
+              interactive={false}
               center={[p.reading!.lat, p.reading!.lng]}
-              radius={7}
+              radius={p.reading!.accuracy}
               pathOptions={{
-                color: "#fff",
-                weight: 2,
-                fillColor: colors[p.status] ?? "#64748b",
-                fillOpacity: 1,
+                color: presence.color,
+                fillOpacity: 0.1,
+                weight: 1,
               }}
             >
-              <Popup>
-                <strong>{p.name}</strong>
-                <br />
-                Sai số GPS: ±{Math.round(p.reading!.accuracy)} m<br />
-                {new Date(p.reading!.capturedAt).toLocaleString("vi-VN", {
-                  timeZone: "Asia/Ho_Chi_Minh",
-                })}
-              </Popup>
-            </CircleMarker>
-          </Circle>
-        ))}
+              <CircleMarker
+                center={[p.reading!.lat, p.reading!.lng]}
+                radius={9}
+                pathOptions={{
+                  color: "#fff",
+                  weight: 2,
+                  fillColor: presence.color,
+                  fillOpacity: 1,
+                }}
+              >
+                <Tooltip direction="top" offset={[0, -8]} className="person-map-tooltip">
+                  <PersonDetails person={p} now={now} staleMinutes={staleMinutes} />
+                </Tooltip>
+                <Popup>
+                  <PersonDetails person={p} now={now} staleMinutes={staleMinutes} />
+                </Popup>
+              </CircleMarker>
+            </Circle>
+          );
+        })}
     </MapContainer>
   );
 }

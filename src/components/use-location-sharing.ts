@@ -68,11 +68,13 @@ export function useLocationSharing(
     };
     document.addEventListener("visibilitychange", resume);
     window.addEventListener("online", resume);
+    window.addEventListener("pageshow", resume);
     return () => {
       epoch.current++;
       clearInterval(timer);
       document.removeEventListener("visibilitychange", resume);
       window.removeEventListener("online", resume);
+      window.removeEventListener("pageshow", resume);
     };
   }, [enabled, userId, captureNow]);
   return {

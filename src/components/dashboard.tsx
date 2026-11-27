@@ -32,7 +32,6 @@ import {
   HistoryOutlined,
   EnvironmentOutlined,
   FieldTimeOutlined,
-  GlobalOutlined,
   LogoutOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -44,6 +43,7 @@ import {
 import { circlePolygon, validCircle, type Point } from "@/lib/geo";
 import { rosterCounts } from "@/lib/roster";
 import { deviceContext } from "@/lib/device-context";
+import { withRequestTimeout } from "@/lib/request-timeout";
 import { schoolCenter, schoolRadiusMeters } from "@/lib/campus-preset";
 import HistoryPanel from "./history-panel";
 import { useScreenAwake } from "./use-screen-awake";
@@ -98,22 +98,24 @@ async function api<T = unknown>(
   method = "GET",
   body?: unknown,
 ): Promise<T> {
-  const response = await fetch(`/api/${route}`, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-    cache: "no-store",
-    signal: AbortSignal.timeout(25000),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const err = new Error(
-      data.error || "Không thể kết nối máy chủ.",
-    ) as Error & { status: number };
-    err.status = response.status;
-    throw err;
-  }
-  return data;
+  return withRequestTimeout(async (signal) => {
+    const response = await fetch(`/api/${route}`, {
+      method,
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+      signal,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      const err = new Error(
+        data.error || "Không thể kết nối máy chủ.",
+      ) as Error & { status: number };
+      err.status = response.status;
+      throw err;
+    }
+    return data;
+  }, 25000);
 }
 export default function Dashboard() {
   return (
@@ -157,6 +159,7 @@ function Screen() {
     [draft, setDraft] = useState<Point[]>([]),
     [boundaryMode, setBoundaryMode] = useState<"circle" | "polygon">("circle"),
     [regionFitRevision, setRegionFitRevision] = useState(0),
+    [overviewFitRevision, setOverviewFitRevision] = useState(0),
     [placingCenter, setPlacingCenter] = useState(false),
     [focus, setFocus] = useState<Point | null>(null),
     [query, setQuery] = useState("");
@@ -218,7 +221,18 @@ function Screen() {
   useEffect(() => {
     if (!me) return;
     const id = setInterval(refresh, 15000);
-    return () => clearInterval(id);
+    const resume = () => {
+      if (!document.hidden) void refresh();
+    };
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("pageshow", resume);
+    window.addEventListener("online", resume);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("pageshow", resume);
+      window.removeEventListener("online", resume);
+    };
   }, [me?.id, refresh]); // eslint-disable-line react-hooks/exhaustive-deps
   const gps = useLocationSharing(
     me?.id,
@@ -272,6 +286,7 @@ function Screen() {
     try {
       const r = await api<{ user: Person }>("auth/login", "POST", values);
       sessionEpoch.current++;
+      setFocus(null);
       setMe(r.user);
       setTab(r.user.role === "admin" ? "overview" : "me");
       await refresh();
@@ -288,6 +303,7 @@ function Screen() {
       sessionEpoch.current++;
       setMe(null);
       setState(null);
+      setFocus(null);
       setConsent(false);
       setKeepScreenOn(false);
     } catch (e) {
@@ -663,6 +679,7 @@ function Screen() {
               className={current === n.key ? "selected" : ""}
               onClick={() => {
                 setTab(n.key);
+                setFocus(null);
                 setBoundaryOpen(false);
               }}
             >
@@ -851,6 +868,23 @@ function Screen() {
                 )}
               {current === "overview" && (
                 <>
+                  {!me.tracking && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      title="Thiết bị đang đăng nhập chưa bật chia sẻ GPS"
+                      description={
+                        <>
+                          <p>Đăng nhập không tự bật định vị. Nếu muốn hiện vị trí điện thoại này trên bản đồ, vào Vị trí của tôi và bật chia sẻ.</p>
+                          <Button onClick={() => {
+                            setFocus(null);
+                            setTab("me");
+                          }}>Chia sẻ vị trí máy này</Button>
+                        </>
+                      }
+                      style={{ marginBottom: 20 }}
+                    />
+                  )}
                   <section className="stats">
                     {[
                       {
@@ -907,9 +941,10 @@ function Screen() {
                           <h2>Bản đồ vị trí đã nhận</h2>
                           <p>{campus?.address}</p>
                         </div>
-                        <Tag bordered={false} color="green">
-                          <GlobalOutlined /> OpenStreetMap
-                        </Tag>
+                        <Button onClick={() => {
+                          setFocus(null);
+                          setOverviewFitRevision((value) => value + 1);
+                        }}>Xem tất cả vị trí</Button>
                       </div>
                       <div className="map-wrap">
                         <Map
@@ -917,6 +952,10 @@ function Screen() {
                           circle={campus?.circle}
                           people={people}
                           focus={focus}
+                          fitPeople
+                          fitRevision={overviewFitRevision}
+                          now={state.serverTime}
+                          staleMinutes={campus?.policy.staleMinutes}
                         />
                         {!people.some((p) => p.reading) && (
                           <div className="map-overlay">
@@ -937,7 +976,8 @@ function Screen() {
                           <i className="dot amber" />
                           Mất cập nhật
                         </span>
-                        <span>Vòng tròn = sai số GPS</span>
+                        <span>Rê chuột hoặc chạm điểm để xem thông tin</span>
+                        <span>Điểm xám = đã dừng chia sẻ; vòng tròn = sai số GPS</span>
                       </div>
                     </div>
                     <div className="panel activity">
@@ -1424,8 +1464,26 @@ function Screen() {
                           style={{ marginBottom: 16 }}
                         />
                       )}
+                      {/iPhone|iPad/.test(navigator.userAgent) && (
+                        <Alert
+                          type="info"
+                          showIcon
+                          title="Cấp quyền GPS trên iPhone / Safari"
+                          description="Chọn Cho phép khi website hỏi vị trí. Nếu đã chặn: vào Cài đặt → Quyền riêng tư & Bảo mật → Dịch vụ định vị → Trang web Safari; cho phép khi dùng và bật Vị trí chính xác. Giữ trang hiển thị để gửi GPS."
+                          style={{ marginBottom: 16 }}
+                        />
+                      )}
                       {!me.tracking ? (
                         <>
+                          <Alert
+                            type="info"
+                            showIcon
+                            title="Chia sẻ vị trí đang tắt"
+                            description={me.reading
+                              ? "Bản đồ đang hiển thị vị trí cuối đã lưu. Bật chia sẻ để lấy GPS mới từ điện thoại đang dùng."
+                              : "Đăng nhập chưa tự gửi GPS. Đồng ý chia sẻ và bấm nút bên dưới để lấy vị trí điện thoại này."}
+                            style={{ marginBottom: 16 }}
+                          />
                           <Checkbox
                             checked={consent}
                             onChange={(e) => setConsent(e.target.checked)}
@@ -1544,14 +1602,25 @@ function Screen() {
                           Về vị trí tôi
                         </Button>
                       </div>
-                      <Map
-                        polygon={campus?.polygon ?? []}
-                        circle={campus?.circle}
-                        people={[me]}
-                        focus={focus ?? me.reading}
-                      />
+                      <div className="map-wrap">
+                        <Map
+                          polygon={campus?.polygon ?? []}
+                          circle={campus?.circle}
+                          people={[me]}
+                          focus={focus ?? me.reading}
+                          now={state.serverTime}
+                          staleMinutes={campus?.policy.staleMinutes}
+                        />
+                        {!me.reading && (
+                          <div className="map-overlay">
+                            <AimOutlined /> {me.tracking
+                              ? "Chưa nhận được GPS. Kiểm tra quyền vị trí và bấm Cập nhật GPS ngay."
+                              : "Chưa có GPS. Bật chia sẻ để đưa vị trí lên bản đồ."}
+                          </div>
+                        )}
+                      </div>
                       <div className="map-legend">
-                        Vòng tròn bao quanh vị trí biểu thị sai số GPS.
+                        Rê chuột hoặc chạm điểm vị trí để xem thông tin. Vòng tròn biểu thị sai số GPS.
                       </div>
                     </section>
                   </div>
