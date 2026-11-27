@@ -301,7 +301,7 @@ function CircleEditor({
     () =>
       divIcon({
         className: "circle-edit-marker circle-radius-handle",
-        html: '<span aria-hidden="true">↔</span>',
+        html: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h16M8 8l-4 4 4 4m8-8 4 4-4 4"/></svg>',
         iconSize: [44, 44],
         iconAnchor: [22, 22],
       }),
@@ -311,7 +311,7 @@ function CircleEditor({
     () =>
       divIcon({
         className: "circle-edit-marker circle-center-handle",
-        html: '<span aria-hidden="true">✚</span>',
+        html: '<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
         iconSize: [44, 44],
         iconAnchor: [22, 22],
       }),

@@ -1283,9 +1283,11 @@ footer > span:last-child {
 .stat-blue > strong {
   color: #174f95;
 }
-.circle-edit-marker {
+.leaflet-marker-icon.circle-edit-marker {
   display: grid;
   place-items: center;
+  box-sizing: border-box;
+  padding: 0;
   border-radius: 50%;
   border: 3px solid #087443;
   background: #fff;
@@ -1297,10 +1299,16 @@ footer > span:last-child {
   touch-action: none;
   user-select: none;
 }
+.circle-edit-marker > svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  pointer-events: none;
+}
 .circle-radius-handle {
   cursor: ew-resize;
 }
-.circle-center-handle {
+.circle-edit-marker.circle-center-handle {
   border-color: #1557b0;
   color: #1557b0;
   cursor: grab;
@@ -1331,7 +1339,7 @@ footer > span:last-child {
   border-radius: 10px;
   box-shadow: 0 3px 16px #142c2426;
 }
-.map-person-marker {
+.leaflet-marker-icon.map-person-marker {
   display: grid;
   place-items: center;
   background: transparent;
